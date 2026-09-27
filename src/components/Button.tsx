@@ -1,7 +1,11 @@
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import type { ThemeTokens } from '../types.js'
+import { MouseArea } from '../interaction/MouseArea.js'
+import type { MouseBounds } from '../interaction/MouseArea.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
+import { InputConsumptionResult } from '../types.js'
 
 export type ButtonVariant = 'default' | 'primary' | 'danger' | 'ghost'
 
@@ -11,6 +15,7 @@ export interface ButtonProps {
   focused?: boolean
   children: ReactNode
   onActivate?: () => void
+  mouseBounds?: MouseBounds
 }
 
 export interface ButtonAppearance {
@@ -57,11 +62,13 @@ export function Button({
   disabled = false,
   focused = false,
   children,
+  onActivate,
+  mouseBounds,
 }: ButtonProps) {
   const theme = useTheme()
   const appearance = resolveButtonAppearance(theme, variant, focused, disabled)
 
-  return (
+  const content = (
     <Text
       color={appearance.color}
       dimColor={appearance.dimColor}
@@ -69,5 +76,113 @@ export function Button({
     >
       [{children}]
     </Text>
+  )
+
+  // Keep decorative, render-only buttons usable outside the interaction
+  // providers. The interaction hooks are only mounted when requested.
+  if (onActivate == null && mouseBounds == null) return content
+
+  return (
+    <ButtonInteraction
+      disabled={disabled}
+      focused={focused}
+      mouseBounds={mouseBounds}
+      onActivate={onActivate}
+    >
+      {content}
+    </ButtonInteraction>
+  )
+}
+
+function ButtonInteraction({
+  disabled,
+  focused,
+  mouseBounds,
+  onActivate,
+  children,
+}: {
+  disabled: boolean
+  focused: boolean
+  mouseBounds?: MouseBounds
+  onActivate?: () => void
+  children: ReactNode
+}) {
+  const onActivateRef = useRef(onActivate)
+  const disabledRef = useRef(disabled)
+  const mouseBoundsRef = useRef(mouseBounds)
+  onActivateRef.current = onActivate
+  disabledRef.current = disabled
+  mouseBoundsRef.current = mouseBounds
+
+  const content =
+    onActivate == null ? (
+      children
+    ) : (
+      <ButtonKeyboardActivation
+        disabled={disabled}
+        focused={focused}
+        onActivate={onActivate}
+      >
+        {children}
+      </ButtonKeyboardActivation>
+    )
+
+  if (mouseBounds == null) return content
+
+  return (
+    <MouseArea
+      bounds={mouseBounds}
+      disabled={disabled || onActivate == null}
+      onClick={() => {
+        const currentBounds = mouseBoundsRef.current
+        if (
+          !disabledRef.current &&
+          currentBounds != null &&
+          sameMouseBounds(currentBounds, mouseBounds)
+        ) {
+          onActivateRef.current?.()
+        }
+      }}
+    >
+      {content}
+    </MouseArea>
+  )
+}
+
+function ButtonKeyboardActivation({
+  disabled,
+  focused,
+  onActivate,
+  children,
+}: {
+  disabled: boolean
+  focused: boolean
+  onActivate: () => void
+  children: ReactNode
+}) {
+  const onActivateRef = useRef(onActivate)
+  onActivateRef.current = onActivate
+
+  useKeyHandler(
+    (event) => {
+      if (!event.enter || !focused || disabled) {
+        return InputConsumptionResult.NotConsumed
+      }
+      onActivateRef.current()
+      return InputConsumptionResult.Consumed
+    },
+    'navigation',
+    { enabled: focused && !disabled },
+  )
+
+  return children
+}
+
+function sameMouseBounds(left: MouseBounds, right: MouseBounds): boolean {
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
   )
 }

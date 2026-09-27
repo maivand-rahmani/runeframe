@@ -2,6 +2,9 @@ import { describe, it, expect, expectTypeOf } from 'vitest'
 import * as root from './index.js'
 import type {
   ModalEntry,
+  MouseAreaProps,
+  MouseBounds,
+  MouseClickEvent,
   NavigationContextValue,
   NavigationEntry,
   NavigationProviderProps,
@@ -26,6 +29,8 @@ import type { ModalActionsValue, ModalStateValue, NavigationActionsValue, Naviga
 import type { ScreenContextValue, ScreenProviderProps } from './index.js'
 // @ts-expect-error removed CommandBar props
 import type { CommandBarProps } from './index.js'
+// @ts-expect-error mouse provider internals stay private
+import type { MouseProviderProps } from './index.js'
 
 describe('public barrel', () => {
   it('exposes the canonical focus/input contract', () => {
@@ -38,6 +43,10 @@ describe('public barrel', () => {
     expect(root.InputConsumptionResult.Consumed).toBe(1)
     expect(root.KEY_ENTER).toBe('enter')
     expect(typeof root.normalizeKey).toBe('function')
+  })
+
+  it('exposes the canonical mouse-area primitive', () => {
+    expect(typeof root.MouseArea).toBe('function')
   })
 
   it('exposes the canonical navigation/screens contract', () => {
@@ -69,6 +78,9 @@ describe('public barrel', () => {
     expectTypeOf<SessionLifecycle>().toBeObject()
     expectTypeOf<UseAsyncSessionOptions>().toBeObject()
     expectTypeOf<UseAsyncSessionResult>().toBeObject()
+    expectTypeOf<MouseAreaProps>().toBeObject()
+    expectTypeOf<MouseBounds>().toBeObject()
+    expectTypeOf<MouseClickEvent>().toBeObject()
   })
 
   it('does not export any removed legacy generation', () => {
@@ -107,5 +119,11 @@ describe('public barrel', () => {
     // Command session generation replaced by useAsyncSession
     expect(root).not.toHaveProperty('useCommandSession')
     expect(root).not.toHaveProperty('CommandBar')
+  })
+
+  it('keeps mouse provider and parser internals private', () => {
+    expect(root).not.toHaveProperty('MouseProvider')
+    expect(root).not.toHaveProperty('useMouseRegistry')
+    expect(root).not.toHaveProperty('MouseInputParser')
   })
 })

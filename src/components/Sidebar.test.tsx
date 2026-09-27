@@ -6,6 +6,7 @@ import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
 import { FocusTreeProvider, useFocusable, useFocusGroup } from '../interaction/FocusTreeProvider.js'
 import { NavigationProvider, useNavigation } from '../navigation/NavigationProvider.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
 import { AppShell } from './AppShell.js'
 import { Sidebar, type SidebarItem } from './Sidebar.js'
@@ -204,6 +205,37 @@ describe('Sidebar', () => {
     const frame = lastFrame()
     expect(frame).toContain('Current: plan')
     expect(frame).toContain('› Plan')
+  })
+
+  it('click focuses and navigates to a bounded sidebar item', async () => {
+    function CurrentScreen() {
+      const { currentScreenId } = useNavigation()
+      return <Text>Current: {currentScreenId}</Text>
+    }
+
+    const { lastFrame, stdin } = render(
+      <FrameworkProvider registry={registry} defaultScreen="dashboard">
+        <Sidebar
+          items={sidebarItems}
+          columns={120}
+          mouseBoundsForItem={(item) =>
+            item.id === 'plan'
+              ? { x: 0, y: 2, width: 12, height: 1 }
+              : undefined
+          }
+        />
+        <CurrentScreen />
+      </FrameworkProvider>,
+    )
+
+    await delay(100)
+    stdin.write('\u001B[<0;1;3M')
+    await delay()
+    stdin.write('\u001B[<0;1;3m')
+    await delay()
+
+    expect(lastFrame()).toContain('Current: plan')
+    expect(lastFrame()).toContain('› Plan')
   })
 
   it('moves between the sidebar and content with Tab and horizontal arrows', async () => {

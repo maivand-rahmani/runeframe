@@ -1,4 +1,4 @@
-// @maivandrahmani/englishos-tui-framework — stable barrel exports
+// runeframe — stable barrel exports
 export type * from './types.js'
 export { InputConsumptionResult } from './types.js'
 export * from './constants.js'
@@ -168,5 +168,11 @@ export { EventTracer } from './interaction/EventTracer.js'
 export type { TraceEntry } from './interaction/EventTracer.js'
 export { KeyboardDebugInspector } from './interaction/KeyboardDebugInspector.js'
 export type { KeyboardDebugInspectorProps } from './interaction/KeyboardDebugInspector.js'
+export { MouseArea } from './interaction/MouseArea.js'
+export type {
+  MouseAreaProps,
+  MouseBounds,
+  MouseClickEvent,
+} from './interaction/MouseArea.js'
 
 export * as experimental from './experimental/index.js'

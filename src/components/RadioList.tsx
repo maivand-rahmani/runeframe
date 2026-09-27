@@ -5,6 +5,8 @@ import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
 import { useRegisterActions } from '../commands/ScopedActionRegistryProvider.js'
 import { InputConsumptionResult } from '../types.js'
+import { MouseArea } from '../interaction/MouseArea.js'
+import type { MouseBounds } from '../interaction/MouseArea.js'
 
 // ── Data Types ──
 
@@ -18,6 +20,10 @@ export interface RadioListProps {
   options: RadioListOption[]
   selected: string | null
   onSelect: (value: string) => void
+  mouseBoundsForItem?: (
+    item: RadioListOption,
+    index: number,
+  ) => MouseBounds | undefined
 }
 
 // ── Component ──
@@ -26,13 +32,18 @@ export function RadioList({
   options,
   selected,
   onSelect,
+  mouseBoundsForItem,
 }: RadioListProps) {
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
   const onSelectRef = useRef(onSelect)
   const selectedRef = useRef(selected)
+  const optionsRef = useRef(options)
+  const mouseBoundsForItemRef = useRef(mouseBoundsForItem)
   onSelectRef.current = onSelect
   selectedRef.current = selected
+  optionsRef.current = options
+  mouseBoundsForItemRef.current = mouseBoundsForItem
 
   const [focusIndex, setFocusIndex] = useState(() => {
     // Start at the selected item if there is one and it's enabled
@@ -46,6 +57,29 @@ export function RadioList({
 
   const focusIndexRef = useRef(focusIndex)
   focusIndexRef.current = focusIndex
+
+  const handleMouseSelect = (
+    renderedOption: RadioListOption,
+    index: number,
+    renderedBounds: MouseBounds,
+  ) => {
+    const option = optionsRef.current[index]
+    if (!option || option !== renderedOption) return
+
+    const resolver = mouseBoundsForItemRef.current
+    const currentBounds = resolver?.(option, index)
+    if (
+      option.disabled ||
+      currentBounds == null ||
+      !sameMouseBounds(currentBounds, renderedBounds)
+    ) {
+      return
+    }
+
+    focusIndexRef.current = index
+    setFocusIndex(index)
+    onSelectRef.current(option.value)
+  }
 
   // Find next non-disabled index
   const findNextEnabled = useCallback(
@@ -170,7 +204,7 @@ export function RadioList({
               ? colors.focus.ring
               : colors.text.primary
 
-        return (
+        const row = (
           <Box key={idx}>
             <Text color={bulletColor} dimColor={isDisabled}>
               {isSelected ? '•' : '○'}
@@ -185,7 +219,30 @@ export function RadioList({
             </Text>
           </Box>
         )
+        const mouseBounds = mouseBoundsForItem?.(opt, idx)
+
+        if (mouseBounds == null) return row
+
+        return (
+          <MouseArea
+            key={`${opt.value}:${idx}`}
+            bounds={mouseBounds}
+            disabled={isDisabled}
+            onClick={() => handleMouseSelect(opt, idx, mouseBounds)}
+          >
+            {row}
+          </MouseArea>
+        )
       })}
     </Box>
+  )
+}
+
+function sameMouseBounds(left: MouseBounds, right: MouseBounds): boolean {
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
   )
 }

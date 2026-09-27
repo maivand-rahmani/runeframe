@@ -4,6 +4,8 @@ import type { ReactElement } from 'react'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
 import { ScopedActionRegistryProvider } from '../commands/ScopedActionRegistryProvider.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
+import { ScreenRegistry } from '../screens/registry.js'
 import { RadioList } from './RadioList.js'
 
 function renderInTheme(ui: ReactElement) {
@@ -13,6 +15,17 @@ function renderInTheme(ui: ReactElement) {
         <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
       </KeyboardScopeProvider>
     </ThemeProvider>,
+  )
+}
+
+const interactionRegistry = new ScreenRegistry()
+interactionRegistry.register({ id: 'test', title: 'Test', component: () => null })
+
+function renderInFramework(ui: ReactElement) {
+  return render(
+    <FrameworkProvider registry={interactionRegistry} defaultScreen="test">
+      {ui}
+    </FrameworkProvider>,
   )
 }
 
@@ -138,5 +151,34 @@ describe('RadioList', () => {
     stdin.write('\r')
     await delay()
     expect(selected).toContain('c')
+  })
+
+  it('click selects an enabled option and ignores a disabled option', async () => {
+    const selected: string[] = []
+    const { stdin } = renderInFramework(
+      <RadioList
+        options={optionsWithDisabled}
+        selected={null}
+        onSelect={(value) => selected.push(value)}
+        mouseBoundsForItem={(_option, index) => ({
+          x: 0,
+          y: index,
+          width: 12,
+          height: 1,
+        })}
+      />,
+    )
+
+    await delay(100)
+    stdin.write('\u001B[<0;1;1M')
+    await delay()
+    stdin.write('\u001B[<0;1;1m')
+    await delay()
+    stdin.write('\u001B[<0;1;2M')
+    await delay()
+    stdin.write('\u001B[<0;1;2m')
+    await delay()
+
+    expect(selected).toEqual(['a'])
   })
 })

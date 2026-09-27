@@ -5,6 +5,8 @@ import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
 import { useRegisterActions } from '../commands/ScopedActionRegistryProvider.js'
 import { InputConsumptionResult } from '../types.js'
+import { MouseArea } from '../interaction/MouseArea.js'
+import type { MouseBounds } from '../interaction/MouseArea.js'
 
 // ── Data Types ──
 
@@ -18,6 +20,10 @@ export interface ListSelectProps<T> {
   items: ListSelectItem<T>[]
   onSelect: (value: T) => void
   initialFocus?: number
+  mouseBoundsForItem?: (
+    item: ListSelectItem<T>,
+    index: number,
+  ) => MouseBounds | undefined
 }
 
 // ── Component ──
@@ -26,11 +32,26 @@ export function ListSelect<T>({
   items,
   onSelect,
   initialFocus = 0,
+  mouseBoundsForItem,
 }: ListSelectProps<T>) {
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
   const onSelectRef = useRef(onSelect)
+  const itemsRef = useRef(items)
+  const mouseBoundsForItemRef = useRef(mouseBoundsForItem)
+  const mouseAreaIdsRef = useRef({ ids: new WeakMap<object, number>(), nextId: 0 })
   onSelectRef.current = onSelect
+  itemsRef.current = items
+  mouseBoundsForItemRef.current = mouseBoundsForItem
+
+  function getMouseAreaKey(item: ListSelectItem<T>, index: number): string {
+    let id = mouseAreaIdsRef.current.ids.get(item)
+    if (id === undefined) {
+      id = mouseAreaIdsRef.current.nextId++
+      mouseAreaIdsRef.current.ids.set(item, id)
+    }
+    return `${id}:${index}`
+  }
 
   // Start at initialFocus, or first non-disabled
   const [focusIndex, setFocusIndex] = useState(() => {
@@ -43,6 +64,31 @@ export function ListSelect<T>({
 
   const focusIndexRef = useRef(focusIndex)
   focusIndexRef.current = focusIndex
+
+  const handleMouseSelect = (
+    item: ListSelectItem<T>,
+    index: number,
+    renderedBounds: MouseBounds,
+  ) => {
+    const currentItem = itemsRef.current[index]
+    const resolver = mouseBoundsForItemRef.current
+    const currentBounds =
+      currentItem != null ? resolver?.(currentItem, index) : undefined
+    // Only accept a callback from the row still occupying this position. This
+    // prevents a retained handler from selecting an item after list updates.
+    if (
+      currentItem !== item ||
+      currentItem.disabled ||
+      currentBounds == null ||
+      !sameMouseBounds(currentBounds, renderedBounds)
+    ) {
+      return
+    }
+
+    focusIndexRef.current = index
+    setFocusIndex(index)
+    onSelectRef.current(currentItem.value)
+  }
 
   // Find next non-disabled index
   const findNextEnabled = useCallback(
@@ -149,7 +195,7 @@ export function ListSelect<T>({
         const isFocused = idx === focusIndex
         const isDisabled = item.disabled
 
-        return (
+        const row = (
           <Box key={idx}>
             <Text
               color={
@@ -166,7 +212,30 @@ export function ListSelect<T>({
             </Text>
           </Box>
         )
+        const mouseBounds = mouseBoundsForItem?.(item, idx)
+
+        if (mouseBounds == null) return row
+
+        return (
+          <MouseArea
+            key={getMouseAreaKey(item, idx)}
+            bounds={mouseBounds}
+            disabled={isDisabled}
+            onClick={() => handleMouseSelect(item, idx, mouseBounds)}
+          >
+            {row}
+          </MouseArea>
+        )
       })}
     </Box>
+  )
+}
+
+function sameMouseBounds(left: MouseBounds, right: MouseBounds): boolean {
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
   )
 }

@@ -7,6 +7,7 @@ import {
   NavigationProvider,
   type NavigationProviderProps,
 } from './navigation/NavigationProvider.js'
+import { MouseProvider } from './interaction/MouseProvider.js'
 import { ModalProvider } from './components/ModalProvider.js'
 import { ToastProvider } from './components/ToastProvider.js'
 
@@ -22,10 +23,13 @@ export interface FrameworkProviderProps
  *
  * Provider order (outermost → innermost):
  * Theme → keyboard dispatch → focus tree → scoped actions → navigation →
- * toast host → modal host → children.
+ * mouse registry → toast host → modal host → children.
  *
  * Every capability is always enabled: focus tree, scoped action registry,
- * navigation, modals and toasts. There are no opt-in composition flags.
+ * navigation, mouse areas, modals and toasts. There are no opt-in
+ * composition flags. Toast stays outside Modal so its host remains mounted
+ * when modal content replaces children; MouseProvider wraps both so
+ * modal-rendered screens are inside the mouse registry.
  */
 export function FrameworkProvider({
   children,
@@ -43,11 +47,13 @@ export function FrameworkProvider({
               registry={registry}
               defaultScreen={defaultScreen}
             >
-              <ToastProvider>
-                <ModalProvider onClose={onModalClose}>
-                  {children}
-                </ModalProvider>
-              </ToastProvider>
+              <MouseProvider>
+                <ToastProvider>
+                  <ModalProvider onClose={onModalClose}>
+                    {children}
+                  </ModalProvider>
+                </ToastProvider>
+              </MouseProvider>
             </NavigationProvider>
           </ScopedActionRegistryProvider>
         </FocusTreeProvider>

@@ -1,4 +1,4 @@
-import { useRef, useEffect, type ReactElement } from 'react'
+import { useRef, useEffect, useCallback, type ReactElement } from 'react'
 import { Box, Text } from 'ink'
 import {
   useFocusGroup,
@@ -8,6 +8,8 @@ import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { LAYOUT } from '../constants.js'
 import { InputConsumptionResult } from '../types.js'
+import { MouseArea } from '../interaction/MouseArea.js'
+import type { MouseBounds } from '../interaction/MouseArea.js'
 
 // ── Data Types ──
 
@@ -23,6 +25,7 @@ export interface ListProps<T extends ListItem> {
   onSelect?: (id: string) => void
   onActivate?: (id: string) => void
   maxVisible?: number
+  mouseBoundsForItem?: (item: T, index: number) => MouseBounds | undefined
   renderItem?: (
     item: T,
     state: { focused: boolean; selected: boolean },
@@ -37,6 +40,7 @@ export function List<T extends ListItem>({
   onSelect,
   onActivate,
   maxVisible = LAYOUT.listMaxVisible,
+  mouseBoundsForItem,
   renderItem,
 }: ListProps<T>) {
   const safeMaxVisible = Math.max(1, maxVisible)
@@ -45,7 +49,11 @@ export function List<T extends ListItem>({
       ? items.slice(0, safeMaxVisible)
       : items
 
-  const { GroupProvider, focusedId } = useFocusGroup('list', {
+  const {
+    GroupProvider,
+    focusedId,
+    activate: activateGroup,
+  } = useFocusGroup('list', {
     autoFocus: true,
     scope: 'list',
   })
@@ -59,7 +67,39 @@ export function List<T extends ListItem>({
   onActivateRef.current = onActivate
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
+  const activateGroupRef = useRef(activateGroup)
+  activateGroupRef.current = activateGroup
+  const displayItemsRef = useRef(displayItems)
+  displayItemsRef.current = displayItems
+  const mouseBoundsForItemRef = useRef(mouseBoundsForItem)
+  mouseBoundsForItemRef.current = mouseBoundsForItem
   const prevFocusedIdRef = useRef<string | null>(null)
+  const skipMouseFocusSelectRef = useRef<string | null>(null)
+
+  const handleMouseSelect = useCallback(
+    (id: string, focusItem: () => void, renderedBounds: MouseBounds) => {
+      const index = displayItemsRef.current.findIndex((item) => item.id === id)
+      if (index < 0) return
+
+      const item = displayItemsRef.current[index]
+      const resolver = mouseBoundsForItemRef.current
+      const currentBounds = resolver?.(item, index)
+      // Ignore callbacks retained by an old row after it has been removed,
+      // filtered out, or had its explicit geometry removed.
+      if (
+        currentBounds == null ||
+        !sameMouseBounds(currentBounds, renderedBounds)
+      ) {
+        return
+      }
+
+      activateGroupRef.current()
+      if (focusedIdRef.current !== id) skipMouseFocusSelectRef.current = id
+      focusItem()
+      onSelectRef.current?.(id)
+    },
+    [],
+  )
 
   useKeyHandler(
     (event) => {
@@ -75,12 +115,13 @@ export function List<T extends ListItem>({
 
   // `onSelect` observes roving focus once it leaves the initial item.
   useEffect(() => {
-    if (
-      prevFocusedIdRef.current !== null &&
-      focusedId !== null &&
-      focusedId !== prevFocusedIdRef.current
-    ) {
-      onSelectRef.current?.(focusedId)
+    if (focusedId !== prevFocusedIdRef.current) {
+      if (prevFocusedIdRef.current !== null && focusedId !== null) {
+        if (skipMouseFocusSelectRef.current !== focusedId) {
+          onSelectRef.current?.(focusedId)
+        }
+      }
+      skipMouseFocusSelectRef.current = null
     }
     prevFocusedIdRef.current = focusedId
   }, [focusedId])
@@ -92,11 +133,13 @@ export function List<T extends ListItem>({
   return (
     <GroupProvider>
       <Box flexDirection="column">
-        {displayItems.map((item) => (
+        {displayItems.map((item, index) => (
           <ListItemRow
             key={item.id}
             item={item}
             selectedId={selectedId}
+            mouseBounds={mouseBoundsForItem?.(item, index)}
+            onMouseSelect={handleMouseSelect}
             renderItem={
               renderItem as
                 | ((
@@ -117,43 +160,76 @@ export function List<T extends ListItem>({
 interface ListItemRowProps {
   item: ListItem
   selectedId?: string
+  mouseBounds?: MouseBounds
+  onMouseSelect?: (
+    id: string,
+    focusItem: () => void,
+    renderedBounds: MouseBounds,
+  ) => void
   renderItem?: (
     item: ListItem,
     state: { focused: boolean; selected: boolean },
   ) => ReactElement
 }
 
-function ListItemRow({ item, selectedId, renderItem }: ListItemRowProps) {
+function ListItemRow({
+  item,
+  selectedId,
+  mouseBounds,
+  onMouseSelect,
+  renderItem,
+}: ListItemRowProps) {
   const { colors } = useTheme()
-  const { focused } = useFocusable({ id: item.id })
+  const { focused, onActivate } = useFocusable({ id: item.id })
   const isSelected = selectedId === item.id
 
+  let row: ReactElement
   if (renderItem) {
-    return <Box>{renderItem(item, { focused, selected: isSelected })}</Box>
-  }
+    row = <Box>{renderItem(item, { focused, selected: isSelected })}</Box>
+  } else {
+    const labelColor = focused
+      ? colors.focus.ring
+      : isSelected
+        ? colors.focus.active
+        : colors.text.primary
 
-  const labelColor = focused
-    ? colors.focus.ring
-    : isSelected
-      ? colors.focus.active
-      : colors.text.primary
-
-  return (
-    <Box flexDirection="column">
-      <Box>
-        <Text color={labelColor} bold={isSelected}>
-          {isSelected ? '• ' : '  '}
-          {item.label}
-        </Text>
-      </Box>
-      {item.description && (
+    row = (
+      <Box flexDirection="column">
         <Box>
-          <Text color={colors.text.secondary}>
-            {'  '}
-            {item.description}
+          <Text color={labelColor} bold={isSelected}>
+            {isSelected ? '• ' : '  '}
+            {item.label}
           </Text>
         </Box>
-      )}
-    </Box>
+        {item.description && (
+          <Box>
+            <Text color={colors.text.secondary}>
+              {'  '}
+              {item.description}
+            </Text>
+          </Box>
+        )}
+      </Box>
+    )
+  }
+
+  if (mouseBounds == null) return row
+
+  return (
+    <MouseArea
+      bounds={mouseBounds}
+      onClick={() => onMouseSelect?.(item.id, onActivate, mouseBounds)}
+    >
+      {row}
+    </MouseArea>
+  )
+}
+
+function sameMouseBounds(left: MouseBounds, right: MouseBounds): boolean {
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
   )
 }

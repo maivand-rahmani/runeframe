@@ -44,6 +44,8 @@
     "test:integration:full": "vitest run --config vitest.integration.config.ts --reporter verbose",
     "prepack": "npm run build",
     "pack:check": "npm run build && node scripts/pack-consumer-check.mjs",
+    "test-app": "node scripts/test-app.mjs",
+    "test-app:check": "node scripts/test-app.mjs --check",
     "changeset": "changeset",
     "changeset:version": "changeset version",
     "publish:release": "npm publish --access public",

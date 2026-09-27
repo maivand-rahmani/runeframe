@@ -21,9 +21,12 @@ npm test                        # unit tests (src)
 npm run test:integration:smoke  # integration smoke (examples/__tests__)
 npm run test:integration:full   # integration suite, verbose
 npm run pack:check              # build + packed-consumer ESM-only check
+npm run test-app:check          # published runeframe@0.5.0 consumer app: install + typecheck + tests
 ```
 
 The integration suite runs through `vitest.integration.config.ts` against the example apps in `examples/apps/`.
+
+`examples/test-app` is a separate consumer project that installs the published `runeframe@0.5.0` package from the public registry into its own `node_modules` (it never links the repository package). `npm run test-app` installs it on first run, runs the automated showcase smoke test, then launches the interactive Ink app; `npm run test-app:check` runs the same install plus typecheck/tests without launching and is required in CI.
 
 ## Build
 
@@ -36,7 +39,7 @@ npm run build
 ## Repository settings
 
 - Protect `main`.
-- Require the `test-build` job from `.github/workflows/ci.yml`: install, typecheck, unit tests, and pack check. The integration smoke step is advisory (`continue-on-error`).
+- Require the `test-build` job from `.github/workflows/ci.yml`: install, typecheck, unit tests, pack check, and the published-package test-app check. The integration smoke step is advisory (`continue-on-error`).
 - Allow Actions to create pull requests and write repository contents.
 
 ## Release

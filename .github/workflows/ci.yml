@@ -39,3 +39,6 @@ jobs:
 
       - name: Packed consumer check (ESM-only, Node >= 22)
         run: npm run pack:check
+
+      - name: Test app consumer check (published runeframe@0.5.0)
+        run: npm run test-app:check

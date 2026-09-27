@@ -507,6 +507,10 @@ npm test
 npm run test:integration:smoke   # examples/__tests__ full-stack smoke
 npm run build
 npm run pack:check               # build + packed-consumer ESM check
+npm run test-app                 # install + smoke-test the showcase app, then launch it
+npm run test-app:check           # install + typecheck + tests for the showcase app (CI)
 ```
+
+`examples/test-app` is a standalone consumer project pinned to the published `runeframe@0.5.0` package from the npm registry; it never imports the repository's `src/`, `dist/`, or a local tarball. `npm run test-app` installs its own dependencies on first run (later launches reuse the installed copy while its lockfile stamp is current), runs the automated showcase smoke test, and then starts the interactive Ink app. `npm run test-app:check` is the non-interactive variant used by CI.
 
 See `REPOSITORY_SETUP.md` for repository configuration and release flow.

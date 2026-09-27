@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react'
 import type { FocusScope } from '../types.js'
+import { allocateMouseAreaId } from './mouseAreaId.js'
 import { useMouseRegistry, type MouseAreaRegistration } from './MouseProvider.js'
 
 /**
@@ -48,8 +49,6 @@ export interface MouseAreaProps {
   children?: ReactNode
 }
 
-let nextMouseAreaId = 0
-
 /**
  * Headless mouse target: renders `children` unchanged and registers an
  * explicit absolute-cell rectangle with the surrounding `MouseProvider`.
@@ -67,7 +66,7 @@ export function MouseArea({
   const recordRef = useRef<MouseAreaRegistration | null>(null)
   if (recordRef.current === null) {
     recordRef.current = {
-      id: nextMouseAreaId++,
+      id: allocateMouseAreaId(),
       bounds,
       scope,
       priority,

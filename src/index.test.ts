@@ -5,6 +5,8 @@ import type {
   MouseAreaProps,
   MouseBounds,
   MouseClickEvent,
+  MouseLayoutOrigin,
+  MouseLayoutProps,
   NavigationContextValue,
   NavigationEntry,
   NavigationProviderProps,
@@ -47,6 +49,7 @@ describe('public barrel', () => {
 
   it('exposes the canonical mouse-area primitive', () => {
     expect(typeof root.MouseArea).toBe('function')
+    expect(root.MouseLayout).toBeDefined()
   })
 
   it('exposes the canonical navigation/screens contract', () => {
@@ -81,6 +84,8 @@ describe('public barrel', () => {
     expectTypeOf<MouseAreaProps>().toBeObject()
     expectTypeOf<MouseBounds>().toBeObject()
     expectTypeOf<MouseClickEvent>().toBeObject()
+    expectTypeOf<MouseLayoutOrigin>().toBeObject()
+    expectTypeOf<MouseLayoutProps>().toBeObject()
   })
 
   it('does not export any removed legacy generation', () => {

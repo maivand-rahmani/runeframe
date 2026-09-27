@@ -1,9 +1,12 @@
-import { useRef, type ReactNode } from 'react'
-import { Text } from 'ink'
+import { useLayoutEffect, useRef, type ReactNode } from 'react'
+import { Box, Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import type { ThemeTokens } from '../types.js'
 import { MouseArea } from '../interaction/MouseArea.js'
 import type { MouseBounds } from '../interaction/MouseArea.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { InputConsumptionResult } from '../types.js'
 
@@ -107,12 +110,17 @@ function ButtonInteraction({
   onActivate?: () => void
   children: ReactNode
 }) {
-  const onActivateRef = useRef(onActivate)
-  const disabledRef = useRef(disabled)
-  const mouseBoundsRef = useRef(mouseBounds)
-  onActivateRef.current = onActivate
-  disabledRef.current = disabled
-  mouseBoundsRef.current = mouseBounds
+  const registry = useMouseRegistry()
+  const geometry = useMouseGeometry()
+
+  // Mouse and keyboard handlers read this snapshot, which is refreshed only
+  // from a commit-phase layout effect. Writing the refs during render would
+  // let a render React abandons leak a new callback, disabled flag or explicit
+  // bounds into the currently committed area.
+  const committedRef = useRef({ onActivate, disabled, mouseBounds })
+  useLayoutEffect(() => {
+    committedRef.current = { onActivate, disabled, mouseBounds }
+  })
 
   const content =
     onActivate == null ? (
@@ -127,25 +135,62 @@ function ButtonInteraction({
       </ButtonKeyboardActivation>
     )
 
-  if (mouseBounds == null) return content
+  // Explicit bounds stay authoritative and unchanged.
+  if (mouseBounds != null) {
+    return (
+      <MouseArea
+        bounds={mouseBounds}
+        disabled={disabled || onActivate == null}
+        onClick={() => {
+          const committed = committedRef.current
+          if (
+            !committed.disabled &&
+            committed.mouseBounds != null &&
+            sameMouseBounds(committed.mouseBounds, mouseBounds)
+          ) {
+            committed.onActivate?.()
+          }
+        }}
+      >
+        {content}
+      </MouseArea>
+    )
+  }
 
+  // Automatic bounds are only instrumented beneath a `MouseLayout` inside a
+  // `MouseProvider`. The area is inert until the anchored tree has measured.
+  if (onActivate != null && geometry != null && registry != null) {
+    return (
+      <ButtonAutoMouseTarget disabled={disabled} onActivate={onActivate}>
+        {content}
+      </ButtonAutoMouseTarget>
+    )
+  }
+
+  return content
+}
+
+function ButtonAutoMouseTarget({
+  disabled,
+  onActivate,
+  children,
+}: {
+  disabled: boolean
+  onActivate: () => void
+  children: ReactNode
+}) {
+  // `useAutoMouseArea` installs this render's callback and disabled state only
+  // from its commit-phase layout effect, so a render that never commits cannot
+  // reach the registered area.
+  const ref = useAutoMouseArea({ disabled, onClick: onActivate })
+
+  // This measured Box is a real Yoga node and can reflow tightly constrained
+  // flex rows differently from a bare Ink Text node. Keep it from shrinking
+  // below its content; the opt-in layout tradeoff is documented and tested.
   return (
-    <MouseArea
-      bounds={mouseBounds}
-      disabled={disabled || onActivate == null}
-      onClick={() => {
-        const currentBounds = mouseBoundsRef.current
-        if (
-          !disabledRef.current &&
-          currentBounds != null &&
-          sameMouseBounds(currentBounds, mouseBounds)
-        ) {
-          onActivateRef.current?.()
-        }
-      }}
-    >
-      {content}
-    </MouseArea>
+    <Box ref={ref} flexShrink={0}>
+      {children}
+    </Box>
   )
 }
 
@@ -160,15 +205,17 @@ function ButtonKeyboardActivation({
   onActivate: () => void
   children: ReactNode
 }) {
-  const onActivateRef = useRef(onActivate)
-  onActivateRef.current = onActivate
+  const committedOnActivateRef = useRef(onActivate)
+  useLayoutEffect(() => {
+    committedOnActivateRef.current = onActivate
+  })
 
   useKeyHandler(
     (event) => {
       if (!event.enter || !focused || disabled) {
         return InputConsumptionResult.NotConsumed
       }
-      onActivateRef.current()
+      committedOnActivateRef.current()
       return InputConsumptionResult.Consumed
     },
     'navigation',

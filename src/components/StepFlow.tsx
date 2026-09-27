@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, type ReactNode } from 'react'
 import { Box, Text } from 'ink'
-import { useKeyHandler } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { InputConsumptionResult } from '../types.js'
 
 export interface StepContext {

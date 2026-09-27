@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Box, Text } from 'ink'
-import { useInputInScope } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
 
@@ -94,11 +94,11 @@ export function NumberInput({
     return clamp(final, min, max)
   }
 
-  useInputInScope(
-    (input, key) => {
+  useKeyHandler(
+    (event) => {
       const h = ref.current
 
-      if (key.return) {
+      if (event.enter) {
         const finalValue = commitValue(h.displayValue)
         if (!h.isControlled) {
           h.setInternalBuffer(String(finalValue))
@@ -108,7 +108,7 @@ export function NumberInput({
         return true
       }
 
-      if (key.escape) {
+      if (event.escape) {
         const revertValue = h.defaultValue ?? 0
         if (!h.isControlled) {
           h.setInternalBuffer(String(revertValue))
@@ -117,7 +117,7 @@ export function NumberInput({
         return true
       }
 
-      if (key.backspace) {
+      if (event.backspace) {
         const newBuffer = h.internalBuffer.slice(0, -1)
         if (!h.isControlled) {
           h.setInternalBuffer(newBuffer)
@@ -129,7 +129,7 @@ export function NumberInput({
         return true
       }
 
-      if (key.upArrow) {
+      if (event.up) {
         const current = h.internalBuffer === '' || h.internalBuffer === '-'
           ? 0
           : parseInt(h.internalBuffer, 10)
@@ -143,7 +143,7 @@ export function NumberInput({
         return true
       }
 
-      if (key.downArrow) {
+      if (event.down) {
         const current = h.internalBuffer === '' || h.internalBuffer === '-'
           ? 0
           : parseInt(h.internalBuffer, 10)
@@ -157,8 +157,8 @@ export function NumberInput({
         return true
       }
 
-      if (input.length === 1 && input >= '0' && input <= '9') {
-        const newBuffer = h.internalBuffer + input
+      if (event.isPrintable && event.text >= '0' && event.text <= '9') {
+        const newBuffer = h.internalBuffer + event.text
         if (!h.isControlled) {
           h.setInternalBuffer(newBuffer)
         }
@@ -167,7 +167,7 @@ export function NumberInput({
         return true
       }
 
-      if (input === '-' && h.internalBuffer === '') {
+      if (event.text === '-' && h.internalBuffer === '') {
         if (!h.isControlled) {
           h.setInternalBuffer('-')
         }

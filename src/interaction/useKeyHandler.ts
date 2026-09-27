@@ -1,29 +1,34 @@
 import { useEffect, useRef } from 'react'
-import type { Key } from 'ink'
-import { InputConsumptionResult, type FocusScope, type NormalizedKeyEvent } from '../types.js'
+import {
+  InputConsumptionResult,
+  type FocusScope,
+  type NormalizedKeyEvent,
+} from '../types.js'
 import { normalizeKey } from './KeyEventNormalizer.js'
 import {
   useKeyboardScope,
-  type RegisterHandlerOptions,
-  type ScopedInputEvent,
   type InputHandler,
+  type RegisterHandlerOptions,
 } from './KeyboardScopeProvider.js'
 
-export type LegacyInputHandler = (
-  input: string,
-  key: Key,
-) => void | boolean
-
-export type ScopedInputHandler = (event: ScopedInputEvent) => void | boolean
-
-export interface UseInputInScopeOptions extends RegisterHandlerOptions {
+/**
+ * Options for {@link useKeyHandler} and {@link useKeyBinding}.
+ *
+ * `deps` mirrors the classic React dependency array: change the array
+ * contents to re-register the handler. `enabled` toggles both scope
+ * participation and handler registration without unmounting.
+ */
+export interface UseKeyHandlerOptions extends RegisterHandlerOptions {
   deps?: unknown[]
   enabled?: boolean
 }
 
-export type KeyHandler = (event: NormalizedKeyEvent) => InputConsumptionResult | boolean | void
+/** Handler shape for the canonical normalized keyboard contract. */
+export type KeyHandler = (
+  event: NormalizedKeyEvent,
+) => InputConsumptionResult | boolean | void
 
-export interface KeyBindingOptions extends UseInputInScopeOptions {
+export interface KeyBindingOptions extends UseKeyHandlerOptions {
   modifiers?: {
     ctrl?: boolean
     alt?: boolean
@@ -33,18 +38,22 @@ export interface KeyBindingOptions extends UseInputInScopeOptions {
 }
 
 function normalizeOptions(
-  optionsOrDeps: UseInputInScopeOptions | unknown[] = {},
-): UseInputInScopeOptions {
+  optionsOrDeps: UseKeyHandlerOptions | unknown[] = {},
+): UseKeyHandlerOptions {
   if (Array.isArray(optionsOrDeps)) {
     return { deps: optionsOrDeps }
   }
   return optionsOrDeps
 }
 
-function useInputRegistration(
+/**
+ * Shared registration primitive for normalized key handlers.
+ * Kept internal — consumers use {@link useKeyHandler}/{@link useKeyBinding}.
+ */
+export function useInputRegistration(
   scope: FocusScope,
   handler: InputHandler,
-  optionsOrDeps: UseInputInScopeOptions | unknown[],
+  optionsOrDeps: UseKeyHandlerOptions | unknown[],
 ) {
   const { registerHandler, pushScope, popScope } = useKeyboardScope()
   const options = normalizeOptions(optionsOrDeps)
@@ -72,60 +81,15 @@ function useInputRegistration(
   }, [scope, registerHandler, enabled, options.priority, ...deps])
 }
 
-export function useInputInScope(
-  handler: LegacyInputHandler,
-  scope: FocusScope,
-  deps: unknown[],
-): void
-export function useInputInScope(
-  handler: LegacyInputHandler,
-  scope: FocusScope,
-  options?: UseInputInScopeOptions,
-): void
-export function useInputInScope(
-  handler: LegacyInputHandler,
-  scope: FocusScope,
-  optionsOrDeps: UseInputInScopeOptions | unknown[] = {},
-) {
-  const handlerRef = useRef(handler)
-  handlerRef.current = handler
-
-  useInputRegistration(
-    scope,
-    (event) => handlerRef.current(event.input, event.key),
-    optionsOrDeps,
-  )
-}
-
-export function useScopedInputInScope(
-  handler: ScopedInputHandler,
-  scope: FocusScope,
-  deps: unknown[],
-): void
-export function useScopedInputInScope(
-  handler: ScopedInputHandler,
-  scope: FocusScope,
-  options?: UseInputInScopeOptions,
-): void
-export function useScopedInputInScope(
-  handler: ScopedInputHandler,
-  scope: FocusScope,
-  optionsOrDeps: UseInputInScopeOptions | unknown[] = {},
-) {
-  const handlerRef = useRef(handler)
-  handlerRef.current = handler
-
-  useInputRegistration(
-    scope,
-    (event) => handlerRef.current(event),
-    optionsOrDeps,
-  )
-}
-
+/**
+ * Canonical keyboard hook. Receives a normalized {@link NormalizedKeyEvent}
+ * and returns an {@link InputConsumptionResult} (or a boolean) to control
+ * propagation to lower-priority handlers and parent scopes.
+ */
 export function useKeyHandler(
   handler: KeyHandler,
   scope: FocusScope,
-  options?: UseInputInScopeOptions,
+  options?: UseKeyHandlerOptions,
 ): void {
   const handlerRef = useRef(handler)
   handlerRef.current = handler
@@ -147,6 +111,11 @@ export function useKeyHandler(
   )
 }
 
+/**
+ * Convenience binding on top of the same dispatcher as {@link useKeyHandler}.
+ * Fires `handler` when the normalized key (plus optional modifier checks)
+ * matches, consuming the event.
+ */
 export function useKeyBinding(
   key: string,
   handler: () => void,

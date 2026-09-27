@@ -1,7 +1,10 @@
-# runeframe
+# Runeframe
 
-Reusable Ink/React framework for building terminal applications.
-Version 0.4.5
+Runeframe 0.5 is a reusable Ink/React framework for building keyboard-first terminal applications: screen navigation, a hierarchical focus tree, scoped keyboard handling and actions, composable widgets, and async process sessions.
+
+- **ESM-only.** Runeframe ships ECMAScript modules and nothing else. Use `import` (or dynamic `await import(...)`). There is no CommonJS entry point, so `require('runeframe')` does not work.
+- **Node.js `>= 22.0.0`.**
+- **Peer dependencies:** `ink ^7.0.2` and `react ^19.2.5`.
 
 ## Install
 
@@ -9,41 +12,54 @@ Version 0.4.5
 npm install runeframe
 ```
 
-Peer dependencies: `ink ^7.0.2`, `react ^19.2.5`.
+Install the peer dependencies in your application if your package manager does not install them automatically:
+
+```bash
+npm install ink react
+```
+
+Two entry points are published:
+
+```ts
+import { FrameworkProvider, ScreenRegistry } from 'runeframe'
+import { KeyboardRegistry, ScreenTransition } from 'runeframe/experimental'
+```
+
+Both entries are import-only ESM. The package `exports` map exposes only `types` and `import` conditions.
 
 ## Quickstart
 
 ```tsx
-import { render } from 'ink'
 import React from 'react'
+import { Text, render } from 'ink'
 import {
-  FrameworkProvider,
   AppShell,
-  TopBar,
+  FrameworkProvider,
+  ScreenOutlet,
   ScreenRegistry,
-  ScreenRenderer,
-  useNavigationState,
+  TopBar,
+  useNavigation,
 } from 'runeframe'
 
 const registry = new ScreenRegistry()
 registry.register({
   id: 'home',
   title: 'Home',
-  component: () => 'Hello from Home',
   sidebar: true,
   category: 'main',
+  component: () => <Text>Hello from Runeframe</Text>,
 })
 
 function Shell() {
-  const { currentScreen } = useNavigationState()
+  const { currentScreen } = useNavigation()
   return (
-    <AppShell topBar={<TopBar appName="Demo" screenTitle={currentScreen.title} />}>
-      <ScreenRenderer />
+    <AppShell topBar={<TopBar appName="My App" screenTitle={currentScreen.title} />}>
+      <ScreenOutlet />
     </AppShell>
   )
 }
 
-function App() {
+export function App() {
   return (
     <FrameworkProvider registry={registry} defaultScreen="home">
       <Shell />
@@ -54,1466 +70,443 @@ function App() {
 render(<App />)
 ```
 
-## Provider Architecture
+## FrameworkProvider
 
-`FrameworkProvider` composes providers in this order (outermost to innermost):
+`FrameworkProvider` is the single composition root for an application. Every capability is always enabled; there are no opt-in composition flags.
 
-1. **`ThemeProvider`** — provides design tokens (colors, spacing, typography). Accepts a `themeMode` prop (`'dark'` | `'light'`, default `'dark'`).
-2. **`KeyboardScopeProvider`** — manages the scope stack for keyboard event dispatch. Accepts `defaultScope` (default `'navigation'`).
-3. **`RegionProvider`** (optional, opt-in via `withRegionProvider`) — adds focus region switching. Tab/Shift+Tab cycle through all regions. Left/Right arrows switch directionally: right moves sidebar→content, left moves content→sidebar.
-4. **`NavigationProvider`** — screen registry and navigation state management.
-5. **`ToastProvider`** (optional, opt-in via `withToastProvider`, default `true`) — toast notification system.
-6. **`ModalProvider`** (optional, opt-in via `withModalProvider`, default `true`) — modal dialog management.
+Provider order (outermost → innermost):
+
+1. `ThemeProvider` — design tokens (`themeMode: 'dark' | 'light'`, default `'dark'`).
+2. `KeyboardScopeProvider` — scope stack for keyboard dispatch.
+3. `FocusTreeProvider` — hierarchical focus zones/groups/focusables.
+4. `ScopedActionRegistryProvider` — action registration for hint bars and collision checks.
+5. `NavigationProvider` — screen registry, route history, and the modal stack.
+6. `MouseProvider` — mouse area hit-testing registry.
+7. `ToastProvider` — toast host.
+8. `ModalProvider` — modal host (`onModalClose` callback).
 
 ```tsx
 <FrameworkProvider
   registry={registry}
   defaultScreen="home"
   themeMode="dark"
-  defaultScope="navigation"
-  withRegionProvider={false}
-  withToastProvider={true}
-  withModalProvider={true}
+  onModalClose={() => {}}
 >
   <App />
 </FrameworkProvider>
 ```
 
-This order ensures scope-aware keyboard dispatch, navigation state, and modal isolation behave consistently. Modals sit innermost so they can trap keyboard input without interference.
+`FrameworkProviderProps`: `registry`, `defaultScreen`, `children`, `themeMode?`, `onModalClose?`.
 
-### Manual Composition
+The lower-level providers are exported individually for manual composition (`ThemeProvider`, `KeyboardScopeProvider`, `FocusTreeProvider`, `ScopedActionRegistryProvider`, `NavigationProvider`, `ModalProvider`, `ToastProvider`). `MouseProvider` is internal and not a root export, so only `FrameworkProvider` assembles the complete supported stack, including mouse hit-testing.
 
-For advanced use cases, compose providers directly:
+## Screens and navigation
 
-```tsx
-<ThemeProvider mode="dark">
-  <KeyboardScopeProvider defaultScope="navigation">
-    <RegionProvider defaultRegion="content">
-      <NavigationProvider registry={registry} defaultScreen="home">
-        <ToastProvider>
-          <ModalProvider>
-            <App />
-          </ModalProvider>
-        </ToastProvider>
-      </NavigationProvider>
-    </RegionProvider>
-  </KeyboardScopeProvider>
-</ThemeProvider>
-```
+### Screen definitions
 
-## Input Architecture
-
-The framework's input system normalizes Ink's raw `(input, key)` tuples into a predictable event model with scope-based routing.
-
-### KeyEventNormalizer
-
-`KeyEventNormalizer` (internal utility in `interaction/KeyEventNormalizer.ts`) converts Ink's `Key` object into a `NormalizedKeyEvent` with consistent boolean fields.
-
-The `normalizeKey(input, key)` function maps:
-- `key.upArrow` → `event.up`
-- `key.downArrow` → `event.down`
-- `key.return` → `event.enter`
-- `key.escape` → `event.escape`
-- `key.tab` → `event.tab`
-- `key.backspace` → `event.backspace`
-- `key.delete` → `event.delete`
-- `a-z` letters → `event.key` as the lowercase letter
-- `input === ' '` → `event.space`
-
-### NormalizedKeyEvent
-
-Exported from types. Fields:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `text` | `string` | Printable character (empty for non-printable) |
-| `key` | `string` | Lowercase letter or key name (`'enter'`, `'escape'`, `'up'`, etc.) |
-| `code` | `string` | Physical key code (same as `event.key`) |
-| `isPrintable` | `boolean` | True if this key produces visible text |
-| `backspace` | `boolean` | |
-| `enter` | `boolean` | |
-| `escape` | `boolean` | |
-| `tab` | `boolean` | |
-| `space` | `boolean` | |
-| `up` | `boolean` | |
-| `down` | `boolean` | |
-| `left` | `boolean` | |
-| `right` | `boolean` | |
-| `ctrl` | `boolean` | |
-| `shift` | `boolean` | |
-| `alt` | `boolean` | |
-| `meta` | `boolean` | |
-| `rawInput` | `string` | Original Ink input string |
-
-### Scope Stack and KeyboardScopeProvider
-
-`KeyboardScopeProvider` manages a stack of scope entries. Each entry is a `ScopeEntry` (aliased as `ScopeStackEntry`):
-
-```typescript
-interface ScopeEntry {
-  id: FocusScope
-  priority: number
-  trapsInput: boolean
-  allowsBubbling: boolean
-  globalShortcutsEnabled: boolean
-}
-```
-
-**Dispatch algorithm** (deepest-active scope first):
-1. Iterate scope entries from deepest (last pushed) to shallowest (first).
-2. Within each scope, run registered handlers in priority order (highest first).
-3. If a handler returns `true` or calls `stopPropagation()`, dispatch stops.
-4. If a scope has `trapsInput: true`, events stop after that scope (no bubbling).
-5. Navigation scope is skipped when shell is suspended.
-
-The provider exposes:
-- `activateScope(scope)` — set a single scope, replacing the stack
-- `pushScope(scope)` — add a scope to the stack (no-ops if already present)
-- `popScope(scope?)` — remove a scope (removes last if no argument)
-- `isScopeActive(scope)` — check if scope is in the stack
-- `registerHandler(scope, handler, options?)` — register a keyboard handler
-
-### ConsumptionResult
-
-`InputConsumptionResult` is an enum exported from types:
-
-| Member | Value | Meaning |
-|--------|-------|---------|
-| `NotConsumed` | `0` | Event not handled; continue to next handler |
-| `Consumed` | `1` | Event handled; stop propagation to siblings |
-| `ConsumedAndTrapped` | `2` | Event handled and trapped; no further propagation to any scope |
-
-### Input Hooks
-
-```tsx
-// Legacy: (input, key) callback
-useInputInScope((input, key) => {
-  if (key.upArrow) handleUp()
-}, 'list')
-
-// Modern: ScopedInputEvent with stopPropagation()
-useScopedInputInScope((event) => {
-  if (event.key.upArrow) handleUp()
-  event.stopPropagation()
-}, 'list')
-
-// KeyHandler: NormalizedKeyEvent + ConsumptionResult return
-// (imported from interaction/useInputInScope.ts)
-useKeyHandler((event) => {
-  if (event.up) handleUp()
-  if (event.down) handleDown()
-  return InputConsumptionResult.Consumed
-}, 'list')
-
-// KeyBinding: match a single normalized key
-// (imported from interaction/useInputInScope.ts)
-useKeyBinding('enter', handleSubmit, 'navigation', {
-  modifiers: { ctrl: true }
-})
-```
-
-Note: `useKeyHandler` and `useKeyBinding` are available as internal utilities in `interaction/useInputInScope.ts` but are not part of the stable barrel export.
-
-### useShellSuspension
-
-Temporarily disables shell-level hotkeys (navigation scope) while a widget is active.
-
-```tsx
-const { suspend, restore, isSuspended } = useShellSuspension()
-useEffect(() => {
-  suspend()
-  return () => restore()
-}, [suspend, restore])
-```
-
-Used internally by `ChoicePrompt`, `TextInput`, `NumberInput`, `ListSelect`, `OptionGrid`, `RadioList`, and `ModalDialog`.
-
-## Focus Model
-
-The framework has two focus systems. The v2 focus tree is the modern system. `RegionProvider` is the legacy compat layer.
-
-### FocusTreeProvider (v2)
-
-`FocusTreeProvider` manages a tree of focus zones, groups, and focusable items. It is included in `FrameworkProvider` by default (no opt-in needed).
-
-Three hooks form the focus tree:
-
-#### useFocusZone
-
-Declares a focus zone (a region with independent arrow navigation, like a sidebar, content area, or footer).
-
-```tsx
-const zone = useFocusZone('sidebar')
-// { id: string, isActive: boolean, setActive: () => void }
-```
-
-#### useFocusGroup
-
-Manages a group of focusable items within a zone. Handles which item is active.
-
-```tsx
-const group = useFocusGroup({
-  items: myItems,
-  zone: zone.id,
-  orientation: 'vertical', // or 'horizontal'
-  loop: true,
-})
-// { activeIndex: number, getItemRef: (i) => RefObject, setActiveIndex: (i) => void }
-```
-
-#### useFocusableV2
-
-Marks an individual element as focusable within a group.
-
-```tsx
-const focusable = useFocusableV2({
-  id: item.id,
-  groupId: group.id,
-  zoneId: zone.id,
-})
-// { ref: RefObject, isFocused: boolean, tabIndex: number }
-```
-
-#### Full Example
-
-```tsx
-function MyList() {
-  const zone = useFocusZone('sidebar')
-  const group = useFocusGroup({ items: myItems, zone: zone.id })
-
-  return myItems.map((item, i) => (
-    <Item
-      key={i}
-      isFocused={group.activeIndex === i}
-      ref={group.getItemRef(i)}
-    />
-  ))
-}
-```
-
-### RegionProvider (Legacy Compat)
-
-`RegionProvider` and `useFocusableRegion` still work as a compatibility layer. Enable with `withRegionProvider` on `FrameworkProvider`.
-
-**Core concepts:**
-
-- **Region** — a named interactive zone (`'sidebar'`, `'content'`, `'footer'`)
-- **Active region** — the single region receiving keyboard events
-- **Tab switching** — Tab cycles through registered regions
-
-```tsx
-function SidebarRegion() {
-  const { isActive } = useFocusableRegion('sidebar')
-  return (
-    <FocusScope scope="navigation" autoFocus regionId="sidebar">
-      ...
-    </FocusScope>
-  )
-}
-```
-
-Region-gated input hooks:
-
-```ts
-useInputInRegion(handler, scope, regionId, options?)
-useScopedInputInRegion(handler, scope, regionId, options?)
-```
-
-Check region state anywhere in the tree:
-
-```tsx
-const ctx = useRegionContext()
-// ctx.activeRegionId
-// ctx.isRegionActive(id)
-// ctx.setActiveRegion(id)
-```
-
-## Action System
-
-Two action systems exist. The modern scoped system is recommended for new code.
-
-### ScopedActionRegistryProvider (Modern)
-
-Context-based action registry that automatically cleans up when components unmount.
-
-```tsx
-<ScopedActionRegistryProvider>
-  <MyApp />
-</ScopedActionRegistryProvider>
-```
-
-```tsx
-function MyComponent() {
-  useRegisterActions([
-    {
-      id: 'save',
-      label: 'Save',
-      keys: ['ctrl+s'],
-      handler: handleSave,
-      scope: 'command',
-      enabled: () => hasUnsavedChanges,
-      visible: true,
-      category: 'system',
-    },
-  ])
-  return <Text>My Component</Text>
-}
-```
-
-**Hooks:**
-
-| Hook | Returns | Description |
-|------|---------|-------------|
-| `useRegisterActions(actions)` | `void` | Register actions with automatic cleanup |
-| `useActiveActions()` | `Action[]` | Get visible + enabled actions |
-| `useScopedActionRegistry()` | context value | Full access to registry API |
-
-**Context value methods:**
-
-| Method | Description |
-|--------|-------------|
-| `getVisibleActions()` | Actions where `visible` resolves to true |
-| `getActionsByScope(scope)` | Actions filtered by scope |
-| `registerActions(actions)` | Register actions, returns cleanup function |
-| `isActionAvailable(id)` | Check if action exists and is enabled |
-
-### ActionRegistry (Legacy)
-
-```tsx
-const registry = new ActionRegistry()
-registry.register({
-  id: 'save',
-  label: 'Save',
-  keys: ['ctrl+s'],
-  handler: save,
-  category: 'system',
-})
-registry.search('sav')  // fuzzy search
-registry.getVisibleActions()
-registry.unregister('save')
-```
-
-### Action Interface
-
-```typescript
-interface Action {
-  id: string
-  label: string
-  description?: string
-  category: string
-  handler: () => void
-  shortcut?: string            // original shortcut (backward compat)
-  keys?: string[]              // trigger keys, e.g. ['b'], ['ctrl+p']
-  scope?: FocusScope           // keyboard routing scope
-  enabled?: boolean | (() => boolean)
-  visible?: boolean | (() => boolean)
-  group?: string               // display group for footer hints
-}
-```
-
-### HotkeyHintBar
-
-Auto-generates footer hints from the scoped action registry.
-
-```tsx
-<HotkeyHintBar scope="list" maxHints={6} />
-```
-
-Renders registered actions for the given scope as a formatted key-hint bar.
-
-## Widget Primitives
-
-### Selection Widgets
-
-| Component | Description |
-|-----------|-------------|
-| **`ChoicePrompt`** | Letter-key shortcuts + arrow navigation. Items have a `key` letter for quick selection. |
-| **`ListSelect`** | Vertical selectable list with arrow-only selection. |
-| **`OptionGrid`** | Horizontal grid selector with 2D arrow navigation. |
-| **`RadioList`** | Radio-button-style selection list. |
-
-```tsx
-<ChoicePrompt
-  items={[
-    { key: 'a', label: 'Apple', value: 'apple' },
-    { key: 'b', label: 'Banana', value: 'banana' },
-  ]}
-  onSelect={(item) => handleSelect(item)}
-  onCancel={handleCancel}
-  label="Pick a fruit:"
-/>
-```
-
-```tsx
-<ListSelect
-  items={items}
-  onSelect={(item) => handleSelect(item)}
-  onCancel={handleCancel}
-  label="Choose:"
-/>
-
-<OptionGrid
-  options={gridOptions}
-  columns={3}
-  onSelect={(opt) => handleSelect(opt)}
-/>
-
-<RadioList
-  options={radioOptions}
-  selected={currentValue}
-  onChange={setValue}
-  label="Select one:"
-/>
-```
-
-### Input Widgets
-
-| Component | Description |
-|-----------|-------------|
-| **`TextInput`** | Controlled/uncontrolled text input with validation and max length. |
-| **`NumberInput`** | Digit buffer, arrow increment/decrement, min/max clamp. |
-| **`CommandInput`** | Mode-aware command line input. |
-| **`SearchInput`** | Search/filter input with live results. |
-
-```tsx
-<TextInput
-  placeholder="Type something"
-  defaultValue=""
-  onSubmit={(value) => handleSubmit(value)}
-  maxLength={50}
-  validate={(v) => v.length > 0 ? undefined : 'Required'}
-/>
-
-<NumberInput
-  label="Count"
-  defaultValue={5}
-  min={1}
-  max={100}
-  onSubmit={(value) => handleCount(value)}
-/>
-
-<CommandInput
-  mode="command"
-  value={input}
-  onChange={setInput}
-  onSubmit={handleSubmit}
-  placeholder="Type a command..."
-/>
-
-<SearchInput
-  placeholder="Search..."
-  onSearch={(query) => filterResults(query)}
-/>
-```
-
-### Modal Widgets
-
-| Component | Description |
-|-----------|-------------|
-| **`ModalDialog`** | Focus-trapped modal wrapper with title and close handler. |
-| **`ConfirmCancel`** | Confirm/cancel dialog with optional danger styling. |
-| **`ConfirmModal`** | Simple confirm modal. |
-| **`ConfirmDialog`** | Programmatic confirm dialog with `useConfirmDialog` hook. |
-| **`InfoModal`** | Information display modal. |
-
-```tsx
-<ModalDialog title="Confirm" onClose={handleClose}>
-  <Text>Are you sure?</Text>
-</ModalDialog>
-
-<ConfirmCancel
-  title="Delete File"
-  message="This action cannot be undone."
-  onConfirm={handleDelete}
-  onCancel={handleCancel}
-  danger
-/>
-
-const { confirm, confirmed } = useConfirmDialog()
-// <ConfirmDialog ... />
-```
-
-### ModalProvider
-
-Provides modal stacking and management:
-
-```tsx
-const modal = useModal()
-modal.open(<MyModal onClose={() => modal.close()} />)
-modal.close()
-```
-
-### Multi-Step Flows
-
-**`StepFlow`** — wizard-style multi-step flow with data collection across steps.
-
-```tsx
-<StepFlow
-  steps={[
-    {
-      id: 'step1',
-      title: 'First Step',
-      component: (ctx) => (
-        <ChoicePrompt
-          items={options}
-          onSelect={(item) => {
-            ctx.setData('choice', item.value)
-            ctx.goNext()
-          }}
-        />
-      ),
-    },
-    {
-      id: 'step2',
-      title: 'Second Step',
-      component: (ctx) => <Text>Data: {String(ctx.data.choice)}</Text>,
-    },
-  ]}
-  onComplete={(data) => console.log('Done', data)}
-  onCancel={() => console.log('Cancelled')}
-/>
-```
-
-Step context (`StepContext`) provides:
-- `data` — accumulated data object across steps
-- `setData(key, value)` — store data for the current step
-- `goNext()` — advance to next step
-- `goBack()` — return to previous step
-- `currentStep` — current step index
-
-### Additional Widgets
-
-| Component | Description |
-|-----------|-------------|
-| **`SelectableList`** | Generic selectable list with keyboard navigation. |
-| **`List`** | Simple list display. |
-
-## Async Session Support
-
-### AsyncSessionRunner
-
-Class that manages process lifecycle with states: `idle`, `starting`, `running`, `waiting`, `error`, `complete`.
-
-```tsx
-const runner = new AsyncSessionRunner({ runner: processRunner })
-runner.start('npm test', undefined, lifecycleCallbacks)
-runner.sendInput('y')
-runner.cancel()
-runner.cleanup()
-```
-
-### useAsyncSession
-
-React hook wrapping `AsyncSessionRunner` with auto-cleanup on unmount.
-
-```tsx
-const {
-  status,       // SessionStatus
-  output,       // OutputLine[]
-  start,        // (command) => void
-  sendInput,    // (input) => void
-  cancel,       // () => void
-  isRunning,    // boolean
-  cleanup,      // () => void
-} = useAsyncSession({ runner })
-```
-
-### Legacy: useCommandSession
-
-The old combined command session hook is still available:
-
-```tsx
-const session = useCommandSession({ runner })
-```
-
-## Navigation and Screens
-
-### ScreenRegistry
-
-Register and manage screens:
+`ScreenRegistry` is a plain class (not a React component). It is passed to `FrameworkProvider` / `NavigationProvider`.
 
 ```tsx
 const registry = new ScreenRegistry()
 registry.register({
   id: 'home',
   title: 'Home',
-  component: HomeScreen,
+  shortcut: 'h',
+  component: ({ params }) => <HomeScreen params={params} />,
   sidebar: true,
   category: 'main',
 })
 ```
 
-Screen definition (`ScreenDefinition`): `id`, `title`, `component`, `sidebar?`, `category?` (`ScreenCategory`).
+`ScreenDefinition`: `id`, `title`, `component`, `shortcut?`, `sidebar?`, `category?`. `ScreenCategory` is `'main' | 'learning' | 'system'`. The `component` receives `{ params, modalProps, closeModal? }`.
 
-### NavigationProvider
+`ScreenRegistry` methods: `register(def)`, `get(id)`, `has(id)`, `getAll()`, `getAllByCategory(category)`, `unregister(id)`.
 
-Provides navigation state and actions:
+`ScreenOutlet` renders the `component` of the screen registered under the current route. It must be rendered inside `NavigationProvider` (normally via `FrameworkProvider`).
+
+### useNavigation
+
+`useNavigation()` returns the combined navigation state and actions:
+
+| Group | Members |
+| --- | --- |
+| State | `currentScreenId`, `currentScreen`, `params`, `registry`, `canGoBack`, `breadcrumbs` |
+| Actions | `push(screenId, params?)`, `pop()`, `popToRoot()`, `replace(screenId, params?)` |
+| Modal state | `modalStack`, `isModalOpen`, `currentModal`, `currentModalProps` |
+| Modal actions | `pushModal(screenId, props?)`, `popModal()`, `popAllModals()` |
 
 ```tsx
-const { navigate, goBack, currentScreen } = useNavigation()
-const { canGoBack, currentScreen, screenStack } = useNavigationState()
-const { navigate, goBack, navigateTo } = useNavigationActions()
+function Home() {
+  const { push, canGoBack, pop, currentScreen } = useNavigation()
+
+  useKeyBinding('s', () => push('settings', { tab: 'general' }), 'navigation')
+  useKeyBinding('escape', () => canGoBack && pop(), 'navigation')
+
+  return <Text>{currentScreen.title}</Text>
+}
 ```
 
-### ScreenProvider / ScreenRenderer
+Modal props reach a rendered modal screen through the screen component's `modalProps` argument. `useModal()` returns `{ openModal, closeModal, isOpen, currentModal }` for controlling the modal host directly.
+
+## Keyboard handling
+
+### Scopes
+
+Keyboard events are dispatched through a scope stack, deepest first. Built-in scopes:
+
+`'navigation' | 'list' | 'command' | 'modal' | 'textinput' | 'process'`
+
+`FocusScope` accepts those built-ins plus any custom string scope.
+
+### useKeyHandler and useKeyBinding
 
 ```tsx
-<ScreenProvider>
-  <ScreenRenderer />
-</ScreenProvider>
+import { InputConsumptionResult, useKeyHandler, useKeyBinding } from 'runeframe'
+
+function Screen() {
+  useKeyHandler(
+    (event) => {
+      if (!event.enter) return false
+      openItem()
+      return true // consumed
+    },
+    'navigation',
+    { priority: 70 },
+  )
+
+  useKeyBinding('p', () => openPalette(), 'navigation', {
+    modifiers: { ctrl: true },
+  })
+
+  return null
+}
 ```
 
-### Modal Navigation
+- `useKeyHandler(handler, scope, options?)` — receives a `NormalizedKeyEvent`; return `true`, `InputConsumptionResult.Consumed`, or `InputConsumptionResult.ConsumedAndTrapped` to consume. Options: `priority?`, `enabled?`, `deps?`.
+- `useKeyBinding(key, handler, scope, options?)` — fires when the normalized key equals `key` (`'b'`, `'enter'`, `'escape'`, `'space'`, `'up'`, ...). `options.modifiers` (`ctrl?`, `alt?`, `shift?`, `meta?`) enables modifier matching; without `modifiers`, events carrying ctrl/alt/meta are ignored.
+- `useKeyboardScope()` returns the scope-stack API: `activeScope`, `activeScopes`, `activateScope`, `pushScope`, `popScope`, `isScopeActive`, `registerHandler`, `suspendShell`, `restoreShell`.
+- `useShellSuspension()` returns `{ suspend, restore, isSuspended }` so a widget can silence shell-level (`'navigation'`) shortcuts while it owns input.
+
+`NormalizedKeyEvent` fields: `text`, `key`, `code`, `isPrintable`, `backspace`, `enter`, `escape`, `tab`, `space`, `up`, `down`, `left`, `right`, `ctrl`, `shift`, `alt`, `meta`, `rawInput`. `normalizeKey(input, key)` converts Ink's raw `(input, key)` tuple, and `KEY_ENTER`, `KEY_ESCAPE`, `KEY_TAB`, `KEY_BACKSPACE`, `KEY_DELETE`, `KEY_UP`, `KEY_DOWN`, `KEY_LEFT`, `KEY_RIGHT`, `KEY_SPACE` are exported key constants.
+
+### Consumption results
+
+| Value | Meaning |
+| --- | --- |
+| `InputConsumptionResult.NotConsumed` (`0`) | Continue to the next handler. |
+| `InputConsumptionResult.Consumed` (`1`) | Stop propagation to siblings; unrelated scopes may still handle the event. |
+| `InputConsumptionResult.ConsumedAndTrapped` (`2`) | Stop all further propagation. |
+
+## Focus tree
+
+`FocusTreeProvider` is composed by `FrameworkProvider`. `useFocusZone` groups a region of the UI, `useFocusGroup` manages list-like navigation inside a zone, and `useFocusable` marks an individual item.
 
 ```tsx
-const { isModalOpen, modalStack } = useModalState()
-const { openModal, closeModal } = useModalActions()
-```
-
-## Layout Components
-
-| Component | Props | Description |
-|-----------|-------|-------------|
-| **`AppShell`** | `topBar`, `sidebar?`, `children`, `sidebarPosition?`, `scrollContent?` | Top-level app layout with optional sidebar. `sidebarPosition='fixed'` keeps sidebar absolute. `scrollContent=true` enables keyboard-driven viewport scrolling (requires `sidebarPosition='fixed'`). |
-| **`TopBar`** | `appName`, `screenTitle`, `children?` | Application header bar. |
-| **`StatusBar`** | `shortcuts?`, `registry?` | Bottom status bar (legacy shortcuts prop supported, or use registry). |
-| **`Panel`** | `title`, `children`, `footer?` | Content panel with optional header/footer. |
-| **`Section`** | `title`, `children` | Grouped content section. |
-| **`Sidebar`** | `items`, `sectionTitles?`, `...` | Navigation sidebar with auto-registration as focus region. |
-| **`Breadcrumbs`** | `crumbs` | Breadcrumb navigation trail. |
-| **`Tabs`** | `tabs`, `activeTab`, `onChange` | Tab navigation. |
-| **`Divider`** | — | Horizontal divider line. |
-| **`Spacer`** | — | Vertical spacing filler. |
-| **`Button`** | `children`, `variant?`, `onPress?`, `disabled?` | Action button. Variants: `ButtonVariant`. |
-| **`Badge`** | `children`, `variant?` | Status badge. Variants: `BadgeVariant`. |
-| **`Table`** | `columns`, `data`, `...` | Data table with column definitions. |
-| **`Card`** | `title`, `children`, `footer?` | Bordered content card. |
-| **`EmptyState`** | `message`, `icon?` | Empty state placeholder. |
-| **`LoadingState`** | `message?` | Loading spinner with message. |
-| **`CommandBar`** | `children`, `...` | Command input bar. |
-| **`ProcessOutputPanel`** | `output`, `...` | Process output display panel. |
-| **`CommandPalette`** | — | Command palette overlay. |
-
-## Diagnostics and Developer Tools
-
-### EventTracer
-
-Captures keyboard event dispatch traces for debugging.
-
-```tsx
-const tracer = new EventTracer(200)  // max 200 entries
-tracer.enable()
-// ... later ...
-const trace = tracer.getTrace()  // TraceEntry[]
-tracer.disable()
-tracer.clear()
-```
-
-### KeyboardDebugInspector
-
-React component that displays live keyboard dispatch state.
-
-```tsx
-<KeyboardDebugInspector
-  tracer={myTracer}
-  getActiveScopeStack={getScopeStack}
-  getActiveFocusPath={getFocusPath}
-/>
-```
-
-Shows the active scope stack, focus path, and recent event trace.
-
-### CollisionDetector
-
-Detects conflicting hotkey registrations across actions.
-
-```tsx
-import { detectCollisions } from '@maivandrahmani/englishos-tui-framework'
-
-const warnings = detectCollisions(registeredActions)
-warnings.forEach((w) => console.warn(w.message))
-```
-
-Returns `CollisionWarning[]` with:
-- `key` — the conflicting key string
-- `severity` — `'error'` (same scope, same key) or `'warning'` (custom scope overlap)
-- `action1Id`, `action2Id` — the conflicting action IDs
-- `message` — human-readable description
-
-Detection algorithm:
-- Same key + same scope → **error** (unreliable dispatch)
-- Same key + different builtin scopes → OK (scope stack handles priority)
-- Same key + one builtin / one custom scope → **warning** (ambiguous priority)
-- Same key + two custom scopes → **warning** (can't determine priority)
-
-## Process Management
-
-| Component/Function | Description |
-|--------------------|-------------|
-| **`NodeProcessRunner`** | Runs Node.js processes with stdout/stderr capture. |
-| **`ProcessRunner`** | Interface for process runners. |
-| **`RunningProcess`** | Represents a running process instance. |
-| **`useCommandSession`** | Legacy combined command session hook. |
-
-## Toast Notifications
-
-```tsx
-<ToastProvider>
-  <App />
-</ToastProvider>
-
-// Inside app:
-const toast = useToast()
-toast.show('Operation completed', { variant: 'success', duration: 3000 })
-toast.success('Saved!')
-toast.error('Failed!')
-toast.warning('Almost there...')
-toast.info('New update available')
-```
-
-Supports close callbacks and result values via `toast.showWithResult()`.
-
-## Theme System
-
-```tsx
-const tokens = useTheme()
-// tokens.colors.text.primary
-// tokens.colors.status.success
-// tokens.colors.focus.ring
-// tokens.spacing
-// tokens.typography
-```
-
-Theme tokens are provided by `ThemeProvider` automatically via `FrameworkProvider`.
-
-## Legacy APIs (Still Supported)
-
-The following legacy APIs remain available. New code should use their v2 replacements.
-
-| Legacy API | v2 Replacement |
-|------------|----------------|
-| `useInputInScope(input, key)` | `useKeyHandler(event)` |
-| `useScopedInputInScope(event)` | (still current for ScopedInputEvent) |
-| `FocusScope` component | `useFocusZone` + `useFocusGroup` |
-| `useFocusable` | `useFocusableV2` |
-| `RegionProvider` | `FocusTreeProvider` |
-| `useFocusableRegion` | `useFocusZone` |
-| `useInputInRegion` | scoped `useKeyHandler` |
-| `ActionRegistry` class | `ScopedActionRegistryProvider` |
-| `CommandPalette` | (still supported) |
-| `useCommandSession` | `useAsyncSession` + `AsyncSessionRunner` |
-| `StatusBar shortcuts` prop | `HotkeyHintBar` |
-| `ScreenTransition` | Moved to `experimental` namespace |
-
-### RegionProvider / useFocusableRegion
-
-These APIs still work as a compat layer. See the Focus Model section for details on opt-in with `withRegionProvider`.
-
-### ActionRegistry
-
-The global singleton `ActionRegistry` class is still exported. Use `ScopedActionRegistryProvider` for scoped, auto-cleaning action management.
-
-## Migration Guide: v0.3.1 to v0.4.0
-
-This guide covers all API changes introduced in the v3 framework update. Each section includes the old API, the new API, and a migration example.
-
----
-
-### 1. New Provider Architecture
-
-#### FocusTreeProvider (replaces manual focus wiring)
-
-Old: Apps composed `FocusScope` and `useFocusable` manually, with no central focus tree.
-
-New: `FocusTreeProvider` manages a tree of focus zones and groups. It is included in `FrameworkProvider` by default.
-
-```tsx
-// Old
-<FocusScope scope="navigation" autoFocus>
-  <MyComponent />
-</FocusScope>
-
-// New
-<FocusTreeProvider>
-  <MyApp />
-</FocusTreeProvider>
-```
-
-#### ScopedActionRegistryProvider (replaces global ActionRegistry)
-
-Old: A singleton `ActionRegistry` class that accumulated actions globally.
-
-New: `ScopedActionRegistryProvider` provides a context-based registry that automatically cleans up when components unmount.
-
-```tsx
-// Old
-const registry = new ActionRegistry()
-registry.register(actions)
-registry.unregister(actionIds)
-
-// New
-<ScopedActionRegistryProvider>
-  <MyComponent />
-</ScopedActionRegistryProvider>
-```
-
----
-
-### 2. Input Hooks Migration
-
-#### useInputInScope(input, key) to useKeyHandler(event)
-
-The legacy `useInputInScope` callback receives `(input, key)` tuples from Ink's `useInput`. The new `useKeyHandler` receives a `NormalizedKeyEvent` with named boolean fields.
-
-```tsx
-// Old
-useInputInScope(
-  (input, key) => {
-    if (key.upArrow) handleUp()
-    if (key.downArrow) handleDown()
-    if (key.return) handleSelect()
-  },
-  'list',
-)
-
-// New
-useKeyHandler(
-  (event) => {
-    if (event.up) handleUp()
-    if (event.down) handleDown()
-    if (event.enter) handleSelect()
-    return InputConsumptionResult.Consumed
-  },
-  'list',
-)
-```
-
-Key differences:
-- Return `InputConsumptionResult.Consumed` to stop propagation (old: `return true`)
-- Event uses named booleans (`event.up`, `event.down`, `event.enter`, `event.escape`) instead of Ink key objects
-- `useKeyHandler` is imported from `interaction/useInputInScope.js`
-
-#### useInputInScope(handler, scope) to useRegisterActions
-
-For simple single-key bindings, use `useRegisterActions`.
-
-```tsx
-// Old
-useInputInScope(
-  (input, key) => {
-    if (key.return) handleSubmit()
-  },
-  'navigation',
-)
-
-// New
-useRegisterActions([
-  {
-    id: 'submit',
-    label: 'Submit',
-    handler: handleSubmit,
-    keys: ['enter'],
-    scope: 'navigation',
-  },
-])
-```
-
----
-
-### 3. Focus Model Migration
-
-#### FocusScope + useFocusable to useFocusZone + useFocusGroup + useFocusableV2
-
-The v2 focus model separates concerns into three layers:
-
-- **`useFocusZone`** — declares a focus zone (like a sidebar, content area, or footer). Zones have independent arrow key navigation.
-- **`useFocusGroup`** — a group of focusable items within a zone. Manages which item is active.
-- **`useFocusableV2`** — marks an individual element as focusable within a group.
-
-```tsx
-// Old
-function MyList() {
-  const { isFocused } = useFocusable()
+function Panel() {
+  const { ZoneProvider } = useFocusZone('content', { orientation: 'vertical' })
   return (
-    <FocusScope scope="list">
-      <Item isFocused={isFocused} />
-    </FocusScope>
+    <ZoneProvider>
+      <Items />
+    </ZoneProvider>
   )
 }
 
-// New
-function MyList() {
-  const zone = useFocusZone('sidebar')
-  const group = useFocusGroup({ items: myItems, zone: zone.id })
+function Items() {
+  const { GroupProvider, focusedId, focusNext, focusPrev } = useFocusGroup('items', {
+    autoFocus: true,
+  })
+  return (
+    <GroupProvider>
+      {/* useFocusable() inside each row */}
+    </GroupProvider>
+  )
+}
 
-  return myItems.map((item, i) => (
-    <Item
-      key={i}
-      isFocused={group.activeIndex === i}
-      ref={group.getItemRef(i)}
-    />
-  ))
+function Row() {
+  const { focused, onActivate } = useFocusable()
+  return <Text>{focused ? '> ' : '  '}row</Text>
 }
 ```
 
-#### RegionProvider (compat shell)
+- `useFocusZone(id, options?)` → `{ zoneId, isActive, activate, ZoneProvider }`. Options: `autoFocus?`, `scope?`, `orientation?`, `order?`, `navigable?`.
+- `useFocusGroup(id, options?)` → `{ groupId, isActive, focusedId, focusNext, focusPrev, activate, GroupProvider }`. Options: `autoFocus?`, `scope?`.
+- `useFocusable(options?)` → `{ id, focused, onActivate, isFirst, isLast }`.
+- `FocusTreeProvider` props: `children`, `defaultScope?`.
 
-`RegionProvider` and `useFocusableRegion` still work as a compatibility layer. For new code, use the focus tree (`FocusTreeProvider` + `useFocusZone`).
+## Scoped actions
 
-| Old | New |
-|-----|-----|
-| `RegionProvider` | `FocusTreeProvider` |
-| `useFocusableRegion` | `useFocusZone` |
-| `useInputInRegion` | `useKeyHandler` (scoped) |
-| `FocusScope regionId` | `useFocusGroup` |
-
----
-
-### 4. Action Registry
-
-#### ActionRegistry to ScopedActionRegistryProvider + useRegisterActions
+Actions are declarative metadata for the UI: id, label, category, handler, and optional `keys`, `scope`, `enabled`, `visible`, and `group`. Use them to power hint bars and collision checks; wire the actual key handling with `useKeyHandler` / `useKeyBinding`.
 
 ```tsx
-// Old
-const registry = new ActionRegistry()
-registry.register([
-  { id: 'save', label: 'Save', keys: ['ctrl+s'], handler: save },
-])
-registry.unregister(['save'])
+import {
+  HotkeyHintBar,
+  useKeyBinding,
+  useRegisterActions,
+} from 'runeframe'
 
-// New
-function MyComponent() {
+function ScreenActions() {
   useRegisterActions([
-    { id: 'save', label: 'Save', keys: ['ctrl+s'], handler: save, scope: 'command' },
+    {
+      id: 'open-palette',
+      label: 'Open palette',
+      category: 'navigation',
+      keys: ['ctrl+p'],
+      scope: 'navigation',
+      handler: () => openPalette(),
+    },
+    {
+      id: 'run',
+      label: 'Run',
+      category: 'context',
+      keys: ['r'],
+      scope: 'list',
+      enabled: () => canRun(),
+      handler: () => run(),
+    },
   ])
-  return <Text>My Component</Text>
+
+  useKeyBinding('p', () => openPalette(), 'navigation', {
+    modifiers: { ctrl: true },
+  })
+  useKeyBinding('r', () => run(), 'list')
+
+  return <HotkeyHintBar scope="navigation" maxHints={8} />
 }
 ```
 
-#### StatusBar shortcuts prop to HotkeyHintBar
+- `useRegisterActions(actions)` — registers the action array once at mount. Action arrays are captured at mount, so remount the owning component (for example with `key`) when definitions change.
+- `useActiveActions()` — currently enabled, visible actions.
+- `useScopedActionRegistry()` — `{ getVisibleActions, getActionsByScope, registerActions, isActionAvailable, version }`.
+- `ScopedActionRegistryProvider` props: `children`, `registry?` (`ActionRegistry`).
+- `ActionRegistry` is the standalone registry class: `register`, `get`, `getAll`, `has`, `unregister`, `search(query)`, `getVisibleActions`, `getActionsByScope(scope)`, `isActionAvailable(id)`.
+- `CommandPalette` props: `registry`, `onClose` — search overlay over an `ActionRegistry`.
+- `detectCollisions(actions)` returns `CollisionWarning[]` for actions that route the same key in overlapping scopes.
+- `HotkeyHintBar` props: `scope?`, `maxHints?` (default 8).
 
-```tsx
-// Old
-<StatusBar shortcuts={[
-  { key: 'q', label: 'Quit' },
-  { key: '/', label: 'Search' },
-]} />
+## Async sessions and process output
 
-// New: HotkeyHintBar reads from ScopedActionRegistryProvider
-<HotkeyHintBar scope="list" maxHints={6} />
+### ProcessRunner
 
-// Or pass registry to StatusBar
-<StatusBar registry={myRegistry} />
+`ProcessRunner` is the spawn abstraction; `NodeProcessRunner` is the default implementation (shell-enabled unless `new NodeProcessRunner({ shell: false })`).
+
+```ts
+interface ProcessRunner {
+  spawn(command: string, args?: string[]): RunningProcess
+}
+
+interface RunningProcess {
+  sendStdin(data: string): void
+  kill(): void
+  onStdout(cb: (data: string) => void): () => void
+  onStderr(cb: (data: string) => void): () => void
+  onExit(cb: (code: number | null) => void): () => void
+}
 ```
 
----
+When `args` is omitted, `command` is treated as a shell command line. Passing an explicit array (including `[]`) spawns `command` with exactly those arguments.
 
-### 5. Widget Migration
+### useAsyncSession
 
-#### Selection Widgets
-
-Replace raw `useInputInScope`-based selection with purpose-built widgets:
-
-| Old | New |
-|-----|-----|
-| `useInputInScope` + manual list | `ChoicePrompt` — letter-key shortcuts + arrow nav |
-| `useInputInScope` + manual list | `ListSelect` — arrow-only selection |
-| `useInputInScope` + manual grid | `OptionGrid` — 2D grid navigation |
-| `useInputInScope` + radio logic | `RadioList` — radio-button style selection |
+`useAsyncSession({ runner, autoCleanup?, maxOutputLines? })` owns one `AsyncSessionRunner` for the component's lifetime and mirrors its bounded event stream into React state.
 
 ```tsx
-// Old: manual selection with useInputInScope
-const [activeIndex, setActiveIndex] = useState(0)
-useInputInScope((input, key) => {
-  if (key.upArrow) setActiveIndex((i) => Math.max(0, i - 1))
-  if (key.downArrow) setActiveIndex((i) => Math.min(items.length - 1, i + 1))
-  if (key.return) onSelect(items[activeIndex])
-}, 'list')
+const session = useAsyncSession({ runner })
 
-// New: ChoicePrompt
-<ChoicePrompt
-  items={items}
-  onSelect={(item) => handleSelect(item)}
-  onCancel={handleCancel}
-  label="Pick one:"
+session.start('npm test')
+session.sendInput('y\n')
+session.cancel()
+```
+
+Result:
+
+| Member | Meaning |
+| --- | --- |
+| `status` | `'idle' \| 'starting' \| 'running' \| 'complete' \| 'error'` |
+| `events` | Bounded event history including status/exit markers |
+| `output` | `events` filtered to `stdout` / `stderr` |
+| `exitCode` | Exit code of the last finished process, or `null` |
+| `start(command, args?)` | Spawn a process, replacing any running one |
+| `sendInput(data)` | Forward data to the running process's stdin |
+| `cancel()` | Stop the running process and return to `idle` |
+| `cleanup()` | Tear down the session and reset hook state to `idle` |
+| `isRunning`, `isComplete`, `isError` | Derived status booleans |
+| `lastEvent` | Most recent `SessionEvent`, or `null` |
+
+`SessionEvent` is `{ type: 'stdout' | 'stderr' | 'status' | 'error' | 'exit', data, timestamp, exitCode? }`. `DEFAULT_MAX_OUTPUT_LINES` is `500`.
+
+`AsyncSessionRunner` is also exported for non-React use: `new AsyncSessionRunner({ runner, maxOutputLines? })` with `start(command, args?, lifecycle?)`, `sendInput`, `cancel`, `cleanup`, `isRunning()`, `events`, `output`, `status`, and `exitCode`.
+
+### ProcessOutputPanel
+
+`ProcessOutputPanel` renders a session's event stream with status, active command, and a visible-line bound.
+
+```tsx
+<ProcessOutputPanel
+  events={session.events}
+  status={session.status}
+  activeCommand={activeCommand}
+  maxVisibleLines={500}
 />
 ```
 
-#### Text Input Widgets
+Props: `events`, `status`, `activeCommand?`, `maxVisibleLines?` (default 500).
 
-| Old | New |
-|-----|-----|
-| Raw `useInput` / `useInputInScope` | `TextInput` |
-| Raw digit parsing | `NumberInput` |
-| Raw command-style input | `CommandInput` |
+## Components
 
-```tsx
-// Old: manual text input
-const [value, setValue] = useState('')
-useInputInScope((input, key) => {
-  if (key.return) onSubmit(value)
-  else if (key.backspace) setValue((v) => v.slice(0, -1))
-  else if (input >= ' ' && input <= '~') setValue((v) => v + input)
-}, 'textinput')
+### Layout and structure
 
-// New
-<TextInput
-  placeholder="Type something"
-  onSubmit={(value) => handleSubmit(value)}
-  maxLength={50}
-/>
-```
+| Component | Props | Purpose |
+| --- | --- | --- |
+| `AppShell` | `topBar?`, `sidebar?`, `statusBar?`, `children`, `columns?`, `sidebarPosition?` (`'flow' \| 'fixed'`), `scrollContent?` | Top-level layout; hides the sidebar below 80 columns. `scrollContent` requires `sidebarPosition="fixed"`. |
+| `TopBar` | `appName`, `screenTitle?`, `columns?` | Application header. |
+| `StatusBar` | `mode?`, `columns?`, `registry?` | Bottom bar; can derive hints from an `ActionRegistry`. |
+| `HotkeyHintBar` | `scope?`, `maxHints?` | Auto-generated hints from registered actions. |
+| `Breadcrumbs` | `onSelect?`, `maxItems?`, `separator?` | Route trail from navigation state. |
+| `Tabs` | `tabs`, `activeTabId`, `onChange`, `scope?` | Keyboard tab strip. |
+| `Panel` | `title?`, `children` | Titled content panel. |
+| `Card` | `children`, `variant?` (`'default' \| 'elevated'`) | Bordered content card. |
+| `Section` | `label?`, `children` | Labeled section. |
+| `Divider` | `label?` | Divider line. |
+| `Spacer` | `size?` (`'sm' \| 'md' \| 'lg'`) | Vertical spacing. |
+| `Badge` | `variant`, `children`, `compact?` | Status badge. |
+| `Table` | `columns`, `rows`, `title?`, `width?` | Data table. |
+| `EmptyState` | `title`, `description`, `hint?`, `action?` | Empty placeholder. |
+| `LoadingState` | `label`, `detail?` | Loading indicator. |
 
-```tsx
-<NumberInput
-  label="Count"
-  defaultValue={5}
-  min={1}
-  max={100}
-  onSubmit={(value) => handleCount(value)}
-/>
+### Button, List, RadioList, ListSelect, Sidebar
 
-<CommandInput
-  mode="command"
-  value={input}
-  onChange={setInput}
-  onSubmit={handleSubmit}
-  placeholder="Type a command..."
-/>
-```
+`Button` — keyboard-activatable action button.
 
-#### Modal Widgets
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `children` | `ReactNode` | Label content. |
+| `variant?` | `'default' \| 'primary' \| 'danger' \| 'ghost'` | Default `'default'`. |
+| `disabled?` | `boolean` | Default `false`. |
+| `focused?` | `boolean` | Renders the focus ring. |
+| `onActivate?` | `() => void` | Fires on activation. |
+| `mouseBounds?` | `MouseBounds` | Optional absolute bounds for mouse activation. |
 
-| Old | New |
-|-----|-----|
-| Manual `Box` + `useInput` | `ModalDialog` |
-| Manual confirm/cancel | `ConfirmCancel` |
+`List` — selectable vertical list.
 
-```tsx
-// Old: manual modal
-<Box borderStyle="round">
-  <Text>Are you sure?</Text>
-</Box>
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `items` | `{ id, label, description? }[]` | Rows. |
+| `selectedId?` | `string` | Currently highlighted row. |
+| `onSelect?` | `(id: string) => void` | Highlight change. |
+| `onActivate?` | `(id: string) => void` | Activation (Enter). |
+| `maxVisible?` | `number` | Visible window size. |
+| `mouseBoundsForItem?` | `(item, index) => MouseBounds \| undefined` | Per-row mouse bounds. |
+| `renderItem?` | `(item, { focused, selected }) => ReactElement` | Custom row renderer. |
 
-// New: ModalDialog
-<ModalDialog title="Confirm" onClose={handleClose}>
-  <Text>Are you sure?</Text>
-</ModalDialog>
+`RadioList` — radio-style single selection.
 
-// Or: ConfirmCancel
-<ConfirmCancel
-  title="Delete File"
-  message="This action cannot be undone."
-  onConfirm={handleDelete}
-  onCancel={handleCancel}
-  danger
-/>
-```
+| Prop | Type |
+| --- | --- |
+| `options` | `{ value, label, disabled? }[]` |
+| `selected` | `string \| null` |
+| `onSelect` | `(value: string) => void` |
+| `mouseBoundsForItem?` | `(option, index) => MouseBounds \| undefined` |
 
-#### Multi-Step Flows
+`ListSelect` — list with immediate selection callback and initial focus.
 
-| Old | New |
-|-----|-----|
-| Manual step state + navigation | `StepFlow` |
+| Prop | Type |
+| --- | --- |
+| `items` | `{ value, label, disabled? }[]` |
+| `onSelect` | `(value: T) => void` |
+| `initialFocus?` | `number` (default 0) |
+| `mouseBoundsForItem?` | `(item, index) => MouseBounds \| undefined` |
 
-```tsx
-<StepFlow
-  steps={[
-    {
-      id: 'step1',
-      title: 'First Step',
-      component: (ctx) => (
-        <ChoicePrompt
-          items={options}
-          onSelect={(item) => {
-            ctx.setData('choice', item.value)
-            ctx.goNext()
-          }}
-        />
-      ),
-    },
-    {
-      id: 'step2',
-      title: 'Second Step',
-      component: (ctx) => <Text>Data: {String(ctx.data.choice)}</Text>,
-    },
-  ]}
-  onComplete={(data) => console.log('Done', data)}
-  onCancel={() => console.log('Cancelled')}
-/>
-```
+`Sidebar` — screen navigation sidebar, grouped by category.
 
----
+| Prop | Type |
+| --- | --- |
+| `items` | `{ id, label, description?, category? }[]` |
+| `sectionTitles?` | `Record<string, string>` |
+| `columns?` | `number` |
+| `categoryOrder?` | `string[]` |
+| `screenOrderByCategory?` | `Record<string, string[]>` |
+| `footer?` | `ReactNode` |
+| `mouseBoundsForItem?` | `(item, index) => MouseBounds \| undefined` |
 
-### 6. Async Sessions
+### Input and flow widgets
 
-#### useCommandSession to useAsyncSession + AsyncSessionRunner
+| Component | Props | Purpose |
+| --- | --- | --- |
+| `TextInput` | `value?`, `onChange?`, `placeholder?`, `maxLength?`, `onSubmit?`, `onCancel?`, `validate?` | Text entry. |
+| `NumberInput` | `value?`, `onChange?`, `min?`, `max?`, `step?`, `defaultValue?`, `label?`, `onSubmit?` | Clamped numeric entry. |
+| `SearchInput` | `value?`, `onChange?`, `placeholder?`, `scope?` | Filter input. |
+| `CommandInput` | `mode` (`'navigation' \| 'command' \| 'process'`), `value`, `onChange`, `onSubmit`, `onCancel?`, `placeholder?`, `prompt?` | Mode-aware command line. |
+| `ChoicePrompt` | `items`, `onSelect`, `onCancel?`, `label?` | Letter-key + arrow choice prompt. |
+| `SelectableList` | `List` props except `items`, plus `filterQuery?`, `filterFn?` | Filterable list. |
+| `OptionGrid` | `options`, `onSelect`, `columns?` | Directional grid selector. |
+| `StepFlow` | `steps`, `initialData?`, `onComplete?`, `onCancel?` | Multi-step wizard with shared data. |
+
+### Modals and toasts
+
+| Component | Props | Purpose |
+| --- | --- | --- |
+| `ModalProvider` / `useModal` | `children`, `onClose?` | Modal host and context API. |
+| `ModalDialog` | `title`, `children`, `onClose`, `footer?`, `trapFocus?`, `width?` | Focus-trapped modal overlay. |
+| `ConfirmCancel` | `title`, `message`, `onConfirm`, `onCancel`, `confirmLabel?`, `cancelLabel?`, `danger?` | Inline confirm/cancel. |
+| `ConfirmModal` | `message`, `onConfirm`, `onCancel`, `title?`, `confirmLabel?`, `cancelLabel?`, `danger?` | Modal confirm. |
+| `ConfirmDialog` / `useConfirmDialog` | `isOpen`, `onClose`, `message`, `onConfirm`, `title?`, `confirmLabel?`, `cancelLabel?`, `danger?` | Controlled confirm dialog; `useConfirmDialog(options)` returns `{ isOpen, open, close, confirm, setMessage, message }`. |
+| `InfoModal` | `message`, `onDismiss`, `title?`, `details?`, `dismissLabel?` | Informational modal. |
+| `ToastProvider` / `useToast` | `children` | Toast host and context API. |
+
+## Mouse areas
+
+`MouseArea` is the public mouse primitive. It renders `children` unchanged, is headless, and registers an explicit rectangle with the surrounding `MouseProvider` (composed by `FrameworkProvider`). Without a `MouseProvider` it renders children and does nothing.
 
 ```tsx
-// Old
-const session = useCommandSession({ runner })
-
-// New
-const {
-  status,
-  output,
-  start,
-  sendInput,
-  cancel,
-  isRunning,
-} = useAsyncSession({ runner })
+<MouseArea
+  bounds={{ x: 0, y: 0, width: 24, height: 1 }}
+  onClick={({ x, y }) => selectAt(x, y)}
+>
+  <Text>Click target</Text>
+</MouseArea>
 ```
 
-`AsyncSessionRunner` is the underlying class that manages process lifecycle:
+Mouse contract:
+
+- **Bounds are caller-supplied and absolute.** `MouseBounds` is a zero-based terminal-cell rectangle, half-open as `[x, x + width) × [y, y + height)`. Runeframe does not infer bounds from Ink/Yoga layout and performs no automatic layout hit testing.
+- **No bounds means keyboard-only.** Controls are keyboard-only unless the caller opts into mouse areas by supplying bounds; there is no ambient mouse behavior.
+- **Clicks only.** There are no hover, drag, or wheel events. `onClick` fires when a matching left press and release land on the area.
+- **Scope and modal rules.** An area with a `scope` participates only while that scope is active. While a modal is open, an area remains eligible if it has an explicit `scope="modal"` or if it registered while the modal was already open (for example content currently rendered inside the modal); areas registered before the modal opened stay unreachable.
+- **Overlap.** `priority` resolves overlaps (higher wins; ties go to the most recently registered area). `disabled` areas still win hit-testing and consume the click without calling `onClick` or passing through.
+- **No terminal compatibility claim yet.** Mouse support has not been validated against named terminal emulators; named compatibility will only be claimed after emulator testing.
+
+Props: `bounds`, `scope?`, `priority?` (default 0), `disabled?` (default `false`), `onClick?`, `children?`. Types: `MouseBounds`, `MouseClickEvent`.
+
+## Theme
+
+`ThemeProvider` supplies the `ThemeTokens` (colors, spacing, typography, border styles) and accepts `mode: 'dark' | 'light'` (default `'dark'`). `useTheme()` returns the active tokens.
 
 ```tsx
-const runner = new AsyncSessionRunner({ runner: processRunner })
-runner.start('npm test', undefined, lifecycle)
-runner.sendInput('y')
-runner.cancel()
-runner.cleanup()
+const { colors } = useTheme()
+<Text color={colors.focus.ring}>focused</Text>
 ```
 
----
+## Diagnostics
 
-### 7. New APIs
+- `EventTracer` — bounded keyboard trace buffer: `new EventTracer(maxEntries?)`, `enable()`, `disable()`, `clear()`, `getTrace()`, `trace(...)`.
+- `KeyboardDebugInspector` — live overlay: `tracer`, `getActiveScopeStack?`, `getActiveFocusPath?`.
+- `detectCollisions(actions)` — reports actions that route the same key in overlapping scopes.
 
-#### useShellSuspension
+## Experimental
 
-Temporarily disables shell-level hotkeys (like navigation scope) while a widget is active. Used internally by all input widgets.
+`runeframe/experimental` currently exports `KeyboardRegistry` (plus the `Keybinding` type) and `ScreenTransition` (plus `ScreenTransitionProps`, `TransitionType`). The rest of this document describes the stable `runeframe` root entry point.
 
-```tsx
-const { suspend, restore } = useShellSuspension()
-useEffect(() => {
-  suspend()
-  return () => restore()
-}, [suspend, restore])
+## Development
+
+Prerequisites: Node.js `>= 22` and npm.
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run test:integration:smoke   # examples/__tests__ full-stack smoke
+npm run build
+npm run pack:check               # build + packed-consumer ESM check
 ```
 
-#### CollisionDetector (detectCollisions)
-
-Detects conflicting hotkey registrations across actions.
-
-```tsx
-import { detectCollisions } from '@maivandrahmani/englishos-tui-framework'
-
-const warnings = detectCollisions(registeredActions)
-warnings.forEach((w) => console.warn(w.message))
-```
-
-#### EventTracer
-
-Captures keyboard event dispatch traces for debugging.
-
-```tsx
-const tracer = new EventTracer(200)
-tracer.enable()
-// ... later ...
-const trace = tracer.getTrace()
-tracer.disable()
-tracer.clear()
-```
-
-#### KeyboardDebugInspector
-
-A React component that displays live keyboard dispatch state.
-
-```tsx
-<KeyboardDebugInspector
-  tracer={myTracer}
-  getActiveScopeStack={getScopeStack}
-  getActiveFocusPath={getFocusPath}
-/>
-```
-
----
-
-### Quick Reference
-
-| Old | New | Location |
-|-----|-----|----------|
-| `useInputInScope(input, key)` | `useKeyHandler(event)` | `interaction/useInputInScope` |
-| `useInputInScope(handler, scope)` | `useRegisterActions` | `commands/ScopedActionRegistryProvider` |
-| `FocusScope` + `useFocusable` | `useFocusZone` + `useFocusGroup` + `useFocusableV2` | `interaction/FocusTreeProvider` |
-| `RegionProvider` | `FocusTreeProvider` | `interaction/FocusTreeProvider` |
-| `ActionRegistry` | `ScopedActionRegistryProvider` | `commands/ScopedActionRegistryProvider` |
-| `StatusBar shortcuts` | `HotkeyHintBar` | `components/HotkeyHintBar` |
-| `useCommandSession` | `useAsyncSession` | `commands/useAsyncSession` |
-| Manual selection | `ChoicePrompt`, `ListSelect`, `RadioList`, `OptionGrid` | `components/*` |
-| Manual text input | `TextInput`, `NumberInput`, `CommandInput` | `components/*` |
-| Manual modal | `ModalDialog`, `ConfirmCancel` | `components/*` |
-| Manual step flow | `StepFlow` | `components/StepFlow` |
-| — | `CollisionDetector` | `commands/CollisionDetector` |
-| — | `EventTracer` | `interaction/EventTracer` |
-| — | `KeyboardDebugInspector` | `interaction/KeyboardDebugInspector` |
-
-## API Reference
-
-Complete list of all exports grouped by category.
-
-### Types (from `types.ts`)
-
-```
-NormalizedKeyEvent
-InputConsumptionResult  (enum: NotConsumed, Consumed, ConsumedAndTrapped)
-ScopeEntry / ScopeStackEntry
-FocusNodeInfo
-FocusNodeType  ('zone' | 'group' | 'focusable')
-ActionCategory  ('system' | 'navigation' | 'context' | 'input')
-ThemeTokens
-KeyboardShortcut
-BuiltinFocusScope
-FocusScope
-```
-
-### Constants (from `constants.ts`)
-
-```
-getScopePriority, KEY_ENTER, KEY_ESCAPE, KEY_TAB, KEY_BACKSPACE,
-KEY_DELETE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
-and all exports from design-system/tokens.js
-```
-
-### Framework Core
-
-| Export | Type |
-|--------|------|
-| `FrameworkProvider` | Component |
-| `FrameworkProviderProps` | Interface |
-| `AppShell` | Component |
-| `AppShellProps` | Interface |
-| `ScreenRegistry` | Class |
-| `ScreenProvider` | Component |
-| `ScreenRenderer` | Component |
-| `useScreen` | Hook |
-| `ScreenDefinition` | Type |
-| `ScreenCategory` | Type |
-
-### Navigation
-
-| Export | Type |
-|--------|------|
-| `NavigationProvider` | Component |
-| `NavigationProviderProps` | Interface |
-| `useNavigation` | Hook |
-| `useNavigationState` | Hook |
-| `useNavigationActions` | Hook |
-| `useModalState` | Hook |
-| `useModalActions` | Hook |
-| `NavigationEntry` | Type |
-| `ModalEntry` | Type |
-| `NavigationContextValue` | Type |
-| `NavigationStateValue` | Type |
-| `NavigationActionsValue` | Type |
-| `ModalStateValue` | Type |
-| `ModalActionsValue` | Type |
-
-### Layout Components
-
-| Export | Type | Description |
-|--------|------|-------------|
-| `Panel` | Component | Content panel |
-| `Table` | Component | Data table |
-| `Column` | Type | Table column definition |
-| `Card` | Component | Bordered card |
-| `Button` | Component | Action button |
-| `ButtonVariant` | Type | Button style variant |
-| `Badge` | Component | Status badge |
-| `BadgeVariant` | Type | Badge style variant |
-| `Section` | Component | Content section |
-| `Divider` | Component | Horizontal rule |
-| `Spacer` | Component | Vertical spacer |
-| `EmptyState` | Component | Empty state placeholder |
-| `LoadingState` | Component | Loading spinner |
-| `TopBar` | Component | App header bar |
-| `Breadcrumbs` | Component | Breadcrumb trail |
-| `Tabs` | Component | Tab navigation |
-| `Tab` | Type | Tab definition |
-| `Sidebar` | Component | Navigation sidebar |
-| `SidebarItem` | Type | Sidebar item definition |
-| `SidebarSectionTitles` | Type | Sidebar section headers |
-| `StatusBar` | Component | Bottom status bar |
-
-### Keyboard / Input
-
-| Export | Type |
-|--------|------|
-| `KeyboardScopeProvider` | Component |
-| `KeyboardScopeProviderProps` | (not exported) |
-| `useKeyboardScope` | Hook |
-| `useShellSuspension` | Hook |
-| `ScopeStackEntry` | Type (alias for `ScopeEntry`) |
-| `useInputInScope` | Hook (legacy) |
-| `useScopedInputInScope` | Hook (modern) |
-| `LegacyInputHandler` | Type |
-| `ScopedInputHandler` | Type |
-| `UseInputInScopeOptions` | Interface |
-
-### Focus System (v2)
-
-| Export | Type |
-|--------|------|
-| `FocusTreeProvider` | Component |
-| `FocusTreeProviderProps` | Type |
-| `FocusZoneContext` | Context |
-| `FocusZoneContextValue` | Type |
-| `FocusGroupContextValue` | Type |
-| `useFocusZone` | Hook |
-| `useFocusGroup` | Hook |
-| `useFocusableV2` | Hook |
-| `UseFocusZoneOptions` | Type |
-| `UseFocusZoneResult` | Type |
-| `UseFocusGroupOptions` | Type |
-| `UseFocusGroupResult` | Type |
-| `UseFocusableV2Options` | Type |
-| `UseFocusableV2Result` | Type |
-
-### Focus System (Legacy)
-
-| Export | Type |
-|--------|------|
-| `FocusScope` | Component |
-| `useFocusScope` | Hook |
-| `FocusScopeProps` | Type |
-| `FocusScopeContextValue` | Type |
-| `useFocusable` | Hook |
-| `UseFocusableOptions` | Type |
-| `UseFocusableResult` | Type |
-| `RegionProvider` | Component |
-| `RegionProviderProps` | Type |
-| `useRegionContext` | Hook |
-| `useFocusableRegion` | Hook |
-| `RegionFocusContextValue` | Type |
-| `UseFocusableRegionResult` | Type |
-| `useInputInRegion` | Hook |
-| `useScopedInputInRegion` | Hook |
-
-### Action System (Modern)
-
-| Export | Type |
-|--------|------|
-| `ScopedActionRegistryProvider` | Component |
-| `ScopedActionRegistryProviderProps` | Type |
-| `ScopedActionRegistryContextValue` | Type |
-| `useScopedActionRegistry` | Hook |
-| `useRegisterActions` | Hook |
-| `useActiveActions` | Hook |
-
-### Action System (Legacy)
-
-| Export | Type |
-|--------|------|
-| `ActionRegistry` | Class |
-| `Action` | Interface |
-| `ActionMatch` | Interface |
-| `CommandPalette` | Component |
-| `CommandPaletteProps` | Type |
-
-### Process / Async Sessions
-
-| Export | Type |
-|--------|------|
-| `NodeProcessRunner` | Class |
-| `ProcessRunner` | Interface |
-| `RunningProcess` | Type |
-| `useCommandSession` | Hook (legacy) |
-| `CommandSessionMode` | Type |
-| `SessionStatus` | Type (legacy) |
-| `UseCommandSessionOptions` | Type |
-| `CommandSessionAPI` | Type |
-| `OutputLine` | Type |
-| `AsyncSessionRunner` | Class |
-| `AsyncSessionStatus` | Type |
-| `AsyncSessionOptions` | Type |
-| `SessionEvent` | Type |
-| `SessionLifecycle` | Type |
-| `useAsyncSession` | Hook |
-| `UseAsyncSessionOptions` | Type |
-
-### Command UI
-
-| Export | Type |
-|--------|------|
-| `CommandBar` | Component |
-| `CommandBarProps` | Type |
-| `ProcessOutputPanel` | Component |
-| `ProcessOutputPanelProps` | Type |
-
-### Modal System
-
-| Export | Type |
-|--------|------|
-| `ModalProvider` | Component |
-| `ModalProviderProps` | Type |
-| `useModal` | Hook |
-| `ModalDialog` | Component |
-| `ModalDialogProps` | Type |
-| `ConfirmCancel` | Component |
-| `ConfirmCancelProps` | Type |
-| `ConfirmModal` | Component |
-| `ConfirmModalProps` | Type |
-| `ConfirmDialog` | Component |
-| `useConfirmDialog` | Hook |
-| `ConfirmDialogProps` | Type |
-| `UseConfirmDialogOptions` | Type |
-| `UseConfirmDialogResult` | Type |
-| `InfoModal` | Component |
-| `InfoModalProps` | Type |
-
-### Toast System
-
-| Export | Type |
-|--------|------|
-| `ToastProvider` | Component |
-| `ToastProviderProps` | Type |
-| `useToast` | Hook |
-| `ToastVariant` | Type |
-| `Toast` | Type |
-| `ToastResult` | Type |
-| `ToastContextValue` | Type |
-
-### Widgets
-
-| Export | Type | Description |
-|--------|------|-------------|
-| `List` | Component | Generic list |
-| `ListItem` | Type | List item definition |
-| `SearchInput` | Component | Search/filter input |
-| `TextInput` | Component | Text input field |
-| `NumberInput` | Component | Number input with increment/decrement |
-| `CommandInput` | Component | Command line input |
-| `SelectableList` | Component | Keyboard-navigable list |
-| `ChoicePrompt` | Component | Letter-key + arrow selection |
-| `ChoiceItem` | Type | Choice option definition |
-| `ListSelect` | Component | Vertical arrow-only selection |
-| `ListSelectItem` | Type | ListSelect option |
-| `OptionGrid` | Component | 2D grid selection |
-| `OptionGridOption` | Type | Grid option |
-| `RadioList` | Component | Radio-button selection |
-| `RadioListOption` | Type | Radio option |
-| `StepFlow` | Component | Multi-step wizard |
-| `Step` | Type | Step definition |
-| `StepContext` | Type | Step execution context |
-
-### Diagnostics
-
-| Export | Type |
-|--------|------|
-| `detectCollisions` | Function |
-| `CollisionWarning` | Type |
-| `EventTracer` | Class |
-| `TraceEntry` | Type |
-| `KeyboardDebugInspector` | Component |
-| `KeyboardDebugInspectorProps` | Type |
-
-### Experimental
-
-Accessible via `import { experimental } from '@maivandrahmani/englishos-tui-framework'`:
-
-| Export | Type |
-|--------|------|
-| `experimental.KeyboardRegistry` | Class |
-| `experimental.Keybinding` | Type |
-| `experimental.ScreenTransition` | Component |
-| `experimental.ScreenTransitionProps` | Type |
-| `experimental.TransitionType` | Type |
+See `REPOSITORY_SETUP.md` for repository configuration and release flow.

@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { Box, Text } from 'ink'
-import { useInputInScope } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 
 export interface CommandInputProps {
@@ -27,18 +27,18 @@ export function CommandInput({
   const ref = useRef({ value, onChange, onSubmit, onCancel, mode })
   ref.current = { value, onChange, onSubmit, onCancel, mode }
 
-  useInputInScope(
-    (input, key) => {
+  useKeyHandler(
+    (event) => {
       const h = ref.current
 
       if (h.mode === 'navigation') return
 
-      if (key.return) {
+      if (event.enter) {
         h.onSubmit()
         return true
       }
 
-      if (key.escape) {
+      if (event.escape) {
         if (h.mode === 'process') {
           h.onSubmit()
         } else {
@@ -47,14 +47,14 @@ export function CommandInput({
         return true
       }
 
-      if (key.backspace) {
+      if (event.backspace) {
         const newValue = h.value.slice(0, -1)
         h.onChange(newValue)
         return true
       }
 
-      if (input.length === 1 && input >= ' ' && input <= '~') {
-        const newValue = h.value + input
+      if (event.isPrintable) {
+        const newValue = h.value + event.text
         h.onChange(newValue)
         return true
       }

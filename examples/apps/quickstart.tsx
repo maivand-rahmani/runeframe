@@ -5,8 +5,8 @@ import {
   ScreenRegistry,
   AppShell,
   TopBar,
-  ScreenRenderer,
-  useNavigationState,
+  useNavigation,
+  ScreenOutlet,
 } from '../../src/index.js'
 
 const registry = new ScreenRegistry()
@@ -19,10 +19,10 @@ registry.register({
 })
 
 function Shell() {
-  const { currentScreen } = useNavigationState()
+  const { currentScreen } = useNavigation()
   return (
-    <AppShell topBar={<TopBar appName="Framework Demo" screenTitle={currentScreen.title} />}>
-      <ScreenRenderer />
+    <AppShell topBar={<TopBar appName="Runeframe" screenTitle={currentScreen.title} />}>
+      <ScreenOutlet />
     </AppShell>
   )
 }

@@ -1,11 +1,8 @@
 import { useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { Box, Text } from 'ink'
-import {
-  useModalActions,
-  useModalState,
-} from '../navigation/NavigationProvider.js'
+import { useNavigation } from '../navigation/NavigationProvider.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
-import { useScopedInputInScope } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useKeyboardScope } from '../interaction/KeyboardScopeProvider.js'
 
 export interface ModalProviderProps {
@@ -14,8 +11,13 @@ export interface ModalProviderProps {
 }
 
 export function ModalProvider({ children, onClose }: ModalProviderProps) {
-  const { isModalOpen, currentModal, currentModalProps, modalStack } = useModalState()
-  const { popModal } = useModalActions()
+  const {
+    isModalOpen,
+    currentModal,
+    currentModalProps,
+    modalStack,
+    popModal,
+  } = useNavigation()
   const { pushScope, popScope, isScopeActive } = useKeyboardScope()
   const { colors } = useTheme()
   const onCloseRef = useRef(onClose)
@@ -33,17 +35,14 @@ export function ModalProvider({ children, onClose }: ModalProviderProps) {
     }
   }, [isModalOpen, isScopeActive, popScope, pushScope])
 
-  useScopedInputInScope(
+  useKeyHandler(
     (event) => {
-      const { key } = event
-      if (key.escape) {
-        if (onCloseRef.current) {
-          onCloseRef.current()
-        }
-        popModal()
-        event.stopPropagation()
-        return true
+      if (!event.escape) return
+      if (onCloseRef.current) {
+        onCloseRef.current()
       }
+      popModal()
+      return true
     },
     'modal',
     { deps: [popModal], priority: 100 },
@@ -85,8 +84,7 @@ export function ModalProvider({ children, onClose }: ModalProviderProps) {
 }
 
 export function useModal() {
-  const { pushModal, popModal } = useModalActions()
-  const { isModalOpen, currentModal } = useModalState()
+  const { pushModal, popModal, isModalOpen, currentModal } = useNavigation()
 
   const openModal = useCallback(
     (screenId: string, props?: Record<string, unknown>) => {

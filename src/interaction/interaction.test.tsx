@@ -1,17 +1,21 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Text } from 'ink'
-import { useState, useContext, useEffect } from 'react'
+import { useContext, useEffect } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import {
   KeyboardScopeProvider,
   useKeyboardScope,
 } from './KeyboardScopeProvider.js'
-import { useInputInScope, useKeyHandler, useKeyBinding } from './useInputInScope.js'
-import { FocusScope, useFocusScope } from './FocusScope.js'
-import { useFocusable } from './useFocusable.js'
-import { RegionProvider } from './RegionProvider.js'
-import { useFocusZone, useFocusGroup, useFocusableV2, FocusTreeProvider, FocusZoneContext } from './FocusTreeProvider.js'
+import { useKeyHandler, useKeyBinding } from './useKeyHandler.js'
+import {
+  useFocusZone,
+  useFocusGroup,
+  useFocusable,
+  FocusTreeProvider,
+  FocusZoneContext,
+} from './FocusTreeProvider.js'
+import { ScopedActionRegistryProvider } from '../commands/ScopedActionRegistryProvider.js'
 import { InputConsumptionResult } from '../types.js'
 import type { NormalizedKeyEvent } from '../types.js'
 
@@ -73,14 +77,14 @@ describe('KeyboardScopeProvider', () => {
     const modalCalls: string[] = []
 
     function NavHandler() {
-      useInputInScope((input) => {
-        navCalls.push(input)
+      useKeyHandler((event) => {
+        navCalls.push(event.text)
       }, 'navigation')
       return null
     }
     function ModalHandler() {
-      useInputInScope((input) => {
-        modalCalls.push(input)
+      useKeyHandler((event) => {
+        modalCalls.push(event.text)
       }, 'modal')
       return null
     }
@@ -117,8 +121,8 @@ describe('KeyboardScopeProvider', () => {
     const listCalls: string[] = []
 
     function ListHandler() {
-      useInputInScope((input) => {
-        listCalls.push(input)
+      useKeyHandler((event) => {
+        listCalls.push(event.text)
       }, 'list')
       return null
     }
@@ -156,238 +160,6 @@ describe('useKeyboardScope()', () => {
     }
     expect(() =>
       renderUI(<Bad />),
-    ).not.toThrow()
-  })
-})
-
-describe('FocusScope', () => {
-  it('renders children', () => {
-    const { lastFrame } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope scope="navigation">
-          <Text>focusable content</Text>
-        </FocusScope>
-      </KeyboardScopeProvider>,
-    )
-    expect(lastFrame()).toContain('focusable content')
-  })
-
-  it('autoFocus highlights first item on mount', async () => {
-    function Item({ id }: { id: string }) {
-      const { focused } = useFocusable({ id })
-      return <Text>{id}{focused ? '*' : ''}</Text>
-    }
-
-    const { lastFrame } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope scope="navigation" autoFocus>
-          <Item id="alpha" />
-          <Item id="beta" />
-        </FocusScope>
-      </KeyboardScopeProvider>,
-    )
-
-    await delay()
-    const frame = lastFrame()
-    expect(frame).toContain('alpha*')
-  })
-
-  it('arrow down moves focus forward', async () => {
-    function Item({ id }: { id: string }) {
-      const { focused } = useFocusable({ id })
-      return <Text>{id}{focused ? '*' : ''}</Text>
-    }
-
-    const { lastFrame, stdin } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope scope="navigation" autoFocus>
-          <Item id="first" />
-          <Item id="second" />
-          <Item id="third" />
-        </FocusScope>
-      </KeyboardScopeProvider>,
-    )
-
-    await delay()
-    expect(lastFrame()).toContain('first*')
-
-    stdin.write('\u001b[B')
-    await delay()
-    expect(lastFrame()).toContain('second*')
-
-    stdin.write('\u001b[B')
-    await delay()
-    expect(lastFrame()).toContain('third*')
-  })
-
-  it('arrow up moves focus backward', async () => {
-    function Item({ id }: { id: string }) {
-      const { focused } = useFocusable({ id })
-      return <Text>{id}{focused ? '*' : ''}</Text>
-    }
-
-    const { lastFrame, stdin } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope scope="navigation" autoFocus>
-          <Item id="a" />
-          <Item id="b" />
-          <Item id="c" />
-        </FocusScope>
-      </KeyboardScopeProvider>,
-    )
-
-    await delay()
-    expect(lastFrame()).toContain('a*')
-
-    stdin.write('\u001b[B')
-    await delay()
-    stdin.write('\u001b[B')
-    await delay()
-    expect(lastFrame()).toContain('c*')
-
-    stdin.write('\u001b[A')
-    await delay()
-    expect(lastFrame()).toContain('b*')
-  })
-
-  it('wraps around at boundaries', async () => {
-    function Item({ id }: { id: string }) {
-      const { focused } = useFocusable({ id })
-      return <Text>{id}{focused ? '*' : ''}</Text>
-    }
-
-    const { lastFrame, stdin } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope scope="navigation" autoFocus>
-          <Item id="x" />
-          <Item id="y" />
-        </FocusScope>
-      </KeyboardScopeProvider>,
-    )
-
-    await delay()
-    expect(lastFrame()).toContain('x*')
-
-    stdin.write('\u001b[B')
-    await delay()
-    expect(lastFrame()).toContain('y*')
-
-    stdin.write('\u001b[B')
-    await delay()
-    expect(lastFrame()).toContain('x*')
-
-    stdin.write('\u001b[A')
-    await delay()
-    expect(lastFrame()).toContain('y*')
-  })
-
-  it('onActivate fires when Enter pressed on focused item', async () => {
-    const activated: string[] = []
-
-    function Item({ id }: { id: string }) {
-      const { focused } = useFocusable({ id })
-      return <Text>{id}{focused ? '*' : ''}</Text>
-    }
-
-    const { stdin } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope
-          scope="navigation"
-          autoFocus
-          onActivate={(id) => activated.push(id)}
-        >
-          <Item id="alpha" />
-          <Item id="beta" />
-        </FocusScope>
-      </KeyboardScopeProvider>,
-    )
-
-    await delay()
-
-    stdin.write('\r')
-    await delay()
-    expect(activated).toContain('alpha')
-
-    stdin.write('\u001b[B')
-    await delay()
-    stdin.write('\r')
-    await delay()
-    expect(activated).toContain('beta')
-  })
-
-  it('provides isFirst and isLast via useFocusable', async () => {
-    function Item({ id }: { id: string }) {
-      const { isFirst, isLast } = useFocusable({ id })
-      return (
-        <Text>
-          {id} first={String(isFirst)} last={String(isLast)}
-        </Text>
-      )
-    }
-
-    const { lastFrame } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope scope="navigation">
-          <Item id="a" />
-          <Item id="b" />
-          <Item id="c" />
-        </FocusScope>
-      </KeyboardScopeProvider>,
-    )
-
-    await delay()
-    const frame = lastFrame()
-    expect(frame).toContain('a first=true last=false')
-    expect(frame).toContain('b first=false last=false')
-    expect(frame).toContain('c first=false last=true')
-  })
-
-  it('onActivate callback works without autoFocus', () => {
-    const activated: string[] = []
-
-    function Item({ id }: { id: string }) {
-      const { focused, onActivate } = useFocusable({ id })
-      return (
-        <Text>
-          {id}{focused ? '*' : ''}
-        </Text>
-      )
-    }
-
-    function Trigger() {
-      const ctx = useFocusScope()
-      return <Text>Items: {ctx.focusedId ?? 'none'}</Text>
-    }
-
-    const { lastFrame } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope
-          scope="navigation"
-          onActivate={(id) => activated.push(id)}
-        >
-          <Item id="x" />
-          <Item id="y" />
-          <Trigger />
-        </FocusScope>
-      </KeyboardScopeProvider>,
-    )
-
-    expect(lastFrame()).toContain('Items: none')
-  })
-})
-
-describe('useFocusScope()', () => {
-  it('throws when used outside FocusScope', () => {
-    function Bad() {
-      useFocusScope()
-      return <Text>bad</Text>
-    }
-    expect(() =>
-      renderUI(
-        <KeyboardScopeProvider>
-          <Bad />
-        </KeyboardScopeProvider>,
-      ),
     ).not.toThrow()
   })
 })
@@ -566,6 +338,49 @@ describe('useKeyHandler', () => {
     await delay()
     expect(calls).not.toContain('fired')
   })
+
+  it('cleans up scope and handler registration on unmount', async () => {
+    let ctx: ReturnType<typeof useKeyboardScope> | null = null
+    const calls: string[] = []
+
+    function Harness() {
+      ctx = useKeyboardScope()
+      return <Text>ok</Text>
+    }
+
+    function Handler() {
+      useKeyHandler(() => {
+        calls.push('fired')
+      }, 'list')
+      return null
+    }
+
+    function App({ showHandler }: { showHandler: boolean }) {
+      return (
+        <KeyboardScopeProvider>
+          <Harness />
+          {showHandler ? <Handler /> : null}
+        </KeyboardScopeProvider>
+      )
+    }
+
+    const { stdin, rerender } = renderUI(<App showHandler />)
+    await delay()
+    expect(ctx!.activeScopes).toContain('list')
+
+    stdin.write('x')
+    await delay()
+    expect(calls).toContain('fired')
+
+    rerender(<App showHandler={false} />)
+    await delay()
+    expect(ctx!.activeScopes).not.toContain('list')
+
+    calls.length = 0
+    stdin.write('x')
+    await delay()
+    expect(calls).toHaveLength(0)
+  })
 })
 
 describe('useKeyBinding', () => {
@@ -689,12 +504,29 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
   function ZoneHarness({
     zoneId,
     children,
+    scope = 'navigation',
+    orientation,
+    order,
   }: {
     zoneId: string
     children: ReactNode
+    scope?: string
+    orientation?: 'horizontal' | 'vertical'
+    order?: number
   }) {
-    const { ZoneProvider } = useFocusZone(zoneId, { scope: 'navigation' })
-    return <ZoneProvider>{children}</ZoneProvider>
+    const { ZoneProvider, isActive } = useFocusZone(zoneId, {
+      scope,
+      orientation,
+      order,
+    })
+    return (
+      <ZoneProvider>
+        <Text>
+          zone={zoneId} active={String(isActive)}
+        </Text>
+        {children}
+      </ZoneProvider>
+    )
   }
 
   function GroupHarness({
@@ -709,7 +541,7 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
   }
 
   function FocusableItem({ id, label }: { id: string; label: string }) {
-    const { focused, isFirst, isLast } = useFocusableV2({ id })
+    const { focused, isFirst, isLast } = useFocusable({ id })
     return (
       <Text>
         {label}
@@ -731,7 +563,7 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
     expect(lastFrame()).toContain('Alpha')
   })
 
-  it('useFocusableV2 reports focused state in a group', async () => {
+  it('useFocusGroup autoFocus focuses the first registered item', async () => {
     function TestGroup() {
       const { GroupProvider, focusedId } = useFocusGroup('items', {
         autoFocus: true,
@@ -756,7 +588,8 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
 
     await delay()
     const frame = lastFrame()
-    expect(frame).toContain('focusedId=none')
+    expect(frame).toContain('focusedId=one')
+    expect(frame).toContain('One*')
   })
 
   it('useFocusGroup arrow down moves focus forward', async () => {
@@ -782,10 +615,6 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
       </KeyboardScopeProvider>,
     )
 
-    await delay()
-    expect(lastFrame()).toContain('Third')
-
-    stdin.write('\u001b[B')
     await delay()
     expect(lastFrame()).toContain('First*')
 
@@ -875,7 +704,7 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
     expect(lastFrame()).toContain('X*')
   })
 
-  it('useFocusableV2 reports isFirst and isLast', async () => {
+  it('useFocusable reports isFirst and isLast', async () => {
     function TestGroup() {
       const { GroupProvider } = useFocusGroup('items', {
         scope: 'navigation',
@@ -904,9 +733,9 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
     expect(frame).toContain('C f=false l=true')
   })
 
-  it('useFocusableV2 returns inert state outside a group', () => {
+  it('useFocusable returns inert state outside a group', () => {
     function OrphanItem() {
-      const { focused, isFirst, isLast } = useFocusableV2({ id: 'orphan' })
+      const { focused, isFirst, isLast } = useFocusable({ id: 'orphan' })
       return (
         <Text>
           orphan focused={String(focused)} f={String(isFirst)} l={String(isLast)}
@@ -1004,11 +833,56 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
     expect(lastFrame()).toContain('active=true')
   })
 
-  it('useFocusableV2 onActivate focuses the item', async () => {
+  it('keeps an explicitly selected sibling group active through context updates', async () => {
+    let activateFirst: (() => void) | null = null
+    let activateSecond: (() => void) | null = null
+
+    function SiblingGroups() {
+      const first = useFocusGroup('first', { scope: 'navigation' })
+      const second = useFocusGroup('second', { scope: 'navigation' })
+      activateFirst = first.activate
+      activateSecond = second.activate
+
+      return (
+        <>
+          <first.GroupProvider>
+            <Text>first active={String(first.isActive)}</Text>
+          </first.GroupProvider>
+          <second.GroupProvider>
+            <Text>second active={String(second.isActive)}</Text>
+          </second.GroupProvider>
+        </>
+      )
+    }
+
+    const { lastFrame } = renderUI(
+      <KeyboardScopeProvider>
+        <ZoneHarness zoneId="main">
+          <SiblingGroups />
+        </ZoneHarness>
+      </KeyboardScopeProvider>,
+    )
+
+    await delay()
+    expect(lastFrame()).toContain('first active=true')
+    expect(lastFrame()).toContain('second active=false')
+
+    activateSecond!()
+    await delay()
+    expect(lastFrame()).toContain('first active=false')
+    expect(lastFrame()).toContain('second active=true')
+
+    activateFirst!()
+    await delay()
+    expect(lastFrame()).toContain('first active=true')
+    expect(lastFrame()).toContain('second active=false')
+  })
+
+  it('useFocusable onActivate focuses the item', async () => {
     let activateB: (() => void) | null = null
 
     function ClickableB() {
-      const { onActivate, focused } = useFocusableV2({ id: 'b' })
+      const { onActivate, focused } = useFocusable({ id: 'b' })
       activateB = onActivate
       return <Text>bFocused={String(focused)}</Text>
     }
@@ -1071,9 +945,6 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
     expect(lastFrame()).toContain('Home')
     expect(lastFrame()).toContain('Settings')
     expect(lastFrame()).toContain('About')
-
-    stdin.write('\u001b[B')
-    await delay()
     expect(lastFrame()).toContain('Home*')
 
     stdin.write('\u001b[B')
@@ -1099,18 +970,291 @@ describe('FocusTreeProvider & Focus Hierarchy', () => {
     )
     expect(lastFrame()).toContain('inside tree')
   })
+
+  it('cycles registered zones forward and backward with Tab and wraps', async () => {
+    const { lastFrame, stdin } = renderUI(
+      <KeyboardScopeProvider>
+        <FocusTreeProvider>
+          <ZoneHarness zoneId="zone-a" order={2}>
+            <Text>A</Text>
+          </ZoneHarness>
+          <ZoneHarness zoneId="zone-b" order={0}>
+            <Text>B</Text>
+          </ZoneHarness>
+          <ZoneHarness zoneId="zone-c" order={1}>
+            <Text>C</Text>
+          </ZoneHarness>
+        </FocusTreeProvider>
+      </KeyboardScopeProvider>,
+    )
+
+    await delay()
+    expect(lastFrame()).toContain('zone=zone-b active=true')
+
+    stdin.write('\t')
+    await delay()
+    expect(lastFrame()).toContain('zone=zone-c active=true')
+
+    stdin.write('\t')
+    await delay()
+    expect(lastFrame()).toContain('zone=zone-a active=true')
+
+    stdin.write('\t')
+    await delay()
+    expect(lastFrame()).toContain('zone=zone-b active=true')
+
+    stdin.write('\u001b[Z')
+    await delay()
+    expect(lastFrame()).toContain('zone=zone-a active=true')
+  })
+
+  it('moves horizontally between configured zones and stops at boundaries', async () => {
+    const { lastFrame, stdin } = renderUI(
+      <KeyboardScopeProvider>
+        <FocusTreeProvider>
+          <ZoneHarness zoneId="left" orientation="horizontal" order={0}>
+            <Text>Left</Text>
+          </ZoneHarness>
+          <ZoneHarness zoneId="right" orientation="horizontal" order={1}>
+            <Text>Right</Text>
+          </ZoneHarness>
+          <ZoneHarness zoneId="vertical" orientation="vertical" order={2}>
+            <Text>Vertical</Text>
+          </ZoneHarness>
+        </FocusTreeProvider>
+      </KeyboardScopeProvider>,
+    )
+
+    await delay()
+    expect(lastFrame()).toContain('zone=left active=true')
+
+    stdin.write('\u001b[D')
+    await delay()
+    expect(lastFrame()).toContain('zone=left active=true')
+
+    stdin.write('\u001b[C')
+    await delay()
+    expect(lastFrame()).toContain('zone=right active=true')
+
+    stdin.write('\u001b[C')
+    await delay()
+    expect(lastFrame()).toContain('zone=right active=true')
+
+    stdin.write('\u001b[D')
+    await delay()
+    expect(lastFrame()).toContain('zone=left active=true')
+  })
+
+  it('does not navigate zones whose keyboard scope is inactive', async () => {
+    let keyboard: ReturnType<typeof useKeyboardScope> | null = null
+
+    function ScopeCapture() {
+      keyboard = useKeyboardScope()
+      return null
+    }
+
+    const { lastFrame, stdin } = renderUI(
+      <KeyboardScopeProvider>
+        <FocusTreeProvider>
+          <ScopeCapture />
+          <ZoneHarness
+            zoneId="first"
+            scope="list"
+            orientation="horizontal"
+            order={0}
+          >
+            <Text>First</Text>
+          </ZoneHarness>
+          <ZoneHarness
+            zoneId="second"
+            scope="list"
+            orientation="horizontal"
+            order={1}
+          >
+            <Text>Second</Text>
+          </ZoneHarness>
+        </FocusTreeProvider>
+      </KeyboardScopeProvider>,
+    )
+
+    await delay()
+    expect(lastFrame()).toContain('zone=first active=false')
+    keyboard!.pushScope('modal')
+    await delay()
+
+    stdin.write('\t')
+    await delay()
+    expect(lastFrame()).toContain('zone=first active=false')
+    expect(lastFrame()).toContain('zone=second active=false')
+  })
+
+  it.each([
+    ['Tab', '\t', 'first'],
+    ['right arrow', '\u001b[C', 'first'],
+    ['left arrow', '\u001b[D', 'second'],
+  ] as const)(
+    'does not route %s to background zones when a modal has no focus zone',
+    async (_keyName, key, initialZone) => {
+      let keyboard: ReturnType<typeof useKeyboardScope> | null = null
+
+      function ScopeCapture() {
+        keyboard = useKeyboardScope()
+        return null
+      }
+
+      const { lastFrame, stdin } = renderUI(
+        <KeyboardScopeProvider>
+          <FocusTreeProvider>
+            <ScopeCapture />
+            <ZoneHarness zoneId="first" orientation="horizontal" order={0}>
+              <Text>First</Text>
+            </ZoneHarness>
+            <ZoneHarness zoneId="second" orientation="horizontal" order={1}>
+              <Text>Second</Text>
+            </ZoneHarness>
+          </FocusTreeProvider>
+        </KeyboardScopeProvider>,
+      )
+
+      await delay()
+      if (initialZone === 'second') {
+        stdin.write('\t')
+        await delay()
+      }
+      expect(lastFrame()).toContain(`zone=${initialZone} active=true`)
+
+      keyboard!.pushScope('modal')
+      await delay()
+      stdin.write(key)
+      await delay()
+      keyboard!.popScope('modal')
+      await delay()
+
+      expect(lastFrame()).toContain(`zone=${initialZone} active=true`)
+      const otherZone = initialZone === 'first' ? 'second' : 'first'
+      expect(lastFrame()).toContain(`zone=${otherZone} active=false`)
+    },
+  )
+
+  it('routes Tab to a zone in the top modal scope instead of background zones', async () => {
+    let keyboard: ReturnType<typeof useKeyboardScope> | null = null
+
+    function ScopeCapture() {
+      keyboard = useKeyboardScope()
+      return null
+    }
+
+    const { lastFrame, stdin } = renderUI(
+      <KeyboardScopeProvider>
+        <FocusTreeProvider>
+          <ScopeCapture />
+          <ZoneHarness zoneId="first" orientation="horizontal" order={0}>
+            <Text>First</Text>
+          </ZoneHarness>
+          <ZoneHarness zoneId="second" orientation="horizontal" order={1}>
+            <Text>Second</Text>
+          </ZoneHarness>
+          <ZoneHarness
+            zoneId="overlay"
+            scope="modal"
+            orientation="horizontal"
+            order={0}
+          >
+            <Text>Overlay</Text>
+          </ZoneHarness>
+          <ZoneHarness
+            zoneId="overlay-second"
+            scope="modal"
+            orientation="horizontal"
+            order={1}
+          >
+            <Text>Second overlay</Text>
+          </ZoneHarness>
+        </FocusTreeProvider>
+      </KeyboardScopeProvider>,
+    )
+
+    await delay()
+    expect(lastFrame()).toContain('zone=first active=true')
+    keyboard!.pushScope('modal')
+    await delay()
+
+    stdin.write('\t')
+    await delay()
+    expect(lastFrame()).toContain('zone=overlay active=true')
+    expect(lastFrame()).toContain('zone=first active=false')
+    expect(lastFrame()).toContain('zone=second active=false')
+
+    stdin.write('\u001b[C')
+    await delay()
+    expect(lastFrame()).toContain('zone=overlay active=false')
+    expect(lastFrame()).toContain('zone=overlay-second active=true')
+
+    stdin.write('\u001b[D')
+    await delay()
+    expect(lastFrame()).toContain('zone=overlay active=true')
+    expect(lastFrame()).toContain('zone=overlay-second active=false')
+  })
+
+  it('unregisters removed zones and selects a remaining zone', async () => {
+    function ConditionalZones({ showSecond }: { showSecond: boolean }) {
+      return (
+        <KeyboardScopeProvider>
+          <FocusTreeProvider>
+            <ZoneHarness zoneId="first" orientation="horizontal" order={0}>
+              <Text>First</Text>
+            </ZoneHarness>
+            {showSecond ? (
+              <ZoneHarness zoneId="second" orientation="horizontal" order={1}>
+                <Text>Second</Text>
+              </ZoneHarness>
+            ) : null}
+          </FocusTreeProvider>
+        </KeyboardScopeProvider>
+      )
+    }
+
+    const { lastFrame, stdin, rerender } = renderUI(
+      <ConditionalZones showSecond />,
+    )
+    await delay()
+
+    stdin.write('\t')
+    await delay()
+    expect(lastFrame()).toContain('zone=second active=true')
+
+    rerender(<ConditionalZones showSecond={false} />)
+    await delay()
+    expect(lastFrame()).toContain('zone=first active=true')
+    expect(lastFrame()).not.toContain('zone=second')
+
+    stdin.write('\t')
+    await delay()
+    expect(lastFrame()).toContain('zone=first active=true')
+  })
 })
 
 // ── Guardrail: Provider Composition ────────────────────────────────
 
 describe('Provider Composition', () => {
-  it('composes all three providers without error', async () => {
+  it('composes keyboard, focus tree and scoped actions without error', async () => {
+    function ComposedWidget() {
+      const { GroupProvider } = useFocusGroup('composed', {
+        scope: 'navigation',
+      })
+      return (
+        <GroupProvider>
+          <Text>composed providers</Text>
+        </GroupProvider>
+      )
+    }
+
     const { lastFrame } = renderUI(
       <KeyboardScopeProvider>
         <FocusTreeProvider>
-          <RegionProvider defaultRegion="content">
-            <Text>composed providers</Text>
-          </RegionProvider>
+          <ScopedActionRegistryProvider>
+            <ComposedWidget />
+          </ScopedActionRegistryProvider>
         </FocusTreeProvider>
       </KeyboardScopeProvider>,
     )
@@ -1181,140 +1325,6 @@ describe('Scope Ownership', () => {
   })
 })
 
-// ── Guardrail: Legacy API Compat ───────────────────────────────────
-
-describe('Legacy API Compatibility', () => {
-  it('legacy useInputInScope still fires with new scope stack', async () => {
-    const calls: string[] = []
-    function LegacyHandler() {
-      useInputInScope((input) => {
-        calls.push(input)
-      }, 'navigation')
-      return null
-    }
-    const { stdin } = renderUI(
-      <KeyboardScopeProvider>
-        <LegacyHandler />
-      </KeyboardScopeProvider>,
-    )
-    await delay()
-    stdin.write('x')
-    await delay()
-    expect(calls).toContain('x')
-  })
-
-  it('legacy useInputInScope receives (input, key) tuple', async () => {
-    const received: Array<{ input: string; key: unknown }> = []
-    function LegacyHandler() {
-      useInputInScope((input, key) => {
-        received.push({ input, key })
-      }, 'navigation')
-      return null
-    }
-    const { stdin } = renderUI(
-      <KeyboardScopeProvider>
-        <LegacyHandler />
-      </KeyboardScopeProvider>,
-    )
-    await delay()
-    stdin.write('z')
-    await delay()
-    expect(received).toHaveLength(1)
-    expect(received[0].input).toBe('z')
-    expect(received[0].key).toBeDefined()
-  })
-})
-
-// ── Guardrail: FocusScope Compat with useFocusZone ─────────────────
-
-describe('FocusScope + useFocusZone Coexistence', () => {
-  it('FocusScope works alongside useFocusZone', async () => {
-    function OldItem({ id }: { id: string }) {
-      const { focused } = useFocusable({ id })
-      return <Text>old-{id}{focused ? '*' : ''}</Text>
-    }
-
-    function NewItem({ id, label }: { id: string; label: string }) {
-      const { focused } = useFocusableV2({ id })
-      return <Text>new-{label}{focused ? '*' : ''}</Text>
-    }
-
-    function NewGroup() {
-      const { GroupProvider } = useFocusGroup('coexist', { scope: 'navigation' })
-      return (
-        <GroupProvider>
-          <NewItem id="n1" label="A" />
-          <NewItem id="n2" label="B" />
-        </GroupProvider>
-      )
-    }
-
-    const { lastFrame } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope scope="navigation" autoFocus>
-          <OldItem id="o1" />
-          <OldItem id="o2" />
-        </FocusScope>
-        <NewGroup />
-      </KeyboardScopeProvider>,
-    )
-    await delay()
-
-    // Both old and new items render without error
-    expect(lastFrame()).toContain('old-o1')
-    expect(lastFrame()).toContain('old-o2')
-    expect(lastFrame()).toContain('new-A')
-    expect(lastFrame()).toContain('new-B')
-
-    // At least one focus system is active (autoFocus triggers a highlight)
-    const frame = lastFrame() ?? ''
-    const hasFocus = frame.includes('*')
-    expect(hasFocus).toBe(true)
-  })
-
-  it('FocusScope onActivate fires with Enter on focused item', async () => {
-    const activated: string[] = []
-
-    function OldItem({ id }: { id: string }) {
-      const { focused } = useFocusable({ id })
-      return <Text>old-{id}{focused ? '*' : ''}</Text>
-    }
-
-    function NewItem({ id, label }: { id: string; label: string }) {
-      const { focused } = useFocusableV2({ id })
-      return <Text>new-{label}{focused ? '*' : ''}</Text>
-    }
-
-    function NewGroup() {
-      const { GroupProvider } = useFocusGroup('act', { scope: 'navigation' })
-      return (
-        <GroupProvider>
-          <NewItem id="nx1" label="X" />
-        </GroupProvider>
-      )
-    }
-
-    const { stdin } = renderUI(
-      <KeyboardScopeProvider>
-        <FocusScope
-          scope="navigation"
-          autoFocus
-          onActivate={(id) => activated.push(id)}
-        >
-          <OldItem id="oa" />
-          <OldItem id="ob" />
-        </FocusScope>
-        <NewGroup />
-      </KeyboardScopeProvider>,
-    )
-    await delay()
-
-    stdin.write('\r')
-    await delay()
-    expect(activated).toContain('oa')
-  })
-})
-
 // ── Guardrail: Shell Suspension ────────────────────────────────────
 
 describe('Shell Suspension', () => {
@@ -1330,15 +1340,15 @@ describe('Shell Suspension', () => {
     }
 
     function NavHandler() {
-      useInputInScope((input) => {
-        navCalls.push(input)
+      useKeyHandler((event) => {
+        navCalls.push(event.text)
       }, 'navigation')
       return null
     }
 
     function OtherHandler() {
-      useInputInScope((input) => {
-        otherCalls.push(input)
+      useKeyHandler((event) => {
+        otherCalls.push(event.text)
       }, 'command')
       return null
     }
@@ -1407,8 +1417,8 @@ describe('Shell Suspension', () => {
     }
 
     function NavHandler() {
-      useInputInScope((input) => {
-        navCalls.push(input)
+      useKeyHandler((event) => {
+        navCalls.push(event.text)
       }, 'navigation')
       return null
     }
@@ -1436,11 +1446,9 @@ describe('Shell Suspension', () => {
 
 // ── Guardrail: Scope Churn Regression ───────────────────────────────
 //
-// When useInputInScope couples pushScope/popScope and registerHandler in
-// a single useEffect, unstable deps (e.g. a recreated array every render
-// in Tabs/ListSelect) cause scope stack oscillation: the effect teardown
-// pops the scope, the setup pushes it back, the state change triggers a
-// re-render that recreates the deps, restarting the cycle indefinitely.
+// Scope push/pop and handler registration are separated in
+// useInputRegistration so unstable deps (e.g. a recreated array every
+// render in Tabs/ListSelect) cannot cause scope stack oscillation.
 
 describe('scope churn regression', () => {
   it('does not churn scope stack on unstable deps', async () => {
@@ -1448,8 +1456,8 @@ describe('scope churn regression', () => {
     let producerRenderCount = 0
 
     function ChurnConsumer({ items }: { items: string[] }) {
-      useInputInScope(
-        (_input, _key) => {},
+      useKeyHandler(
+        () => {},
         'list',
         { deps: [items] },
       )
@@ -1492,8 +1500,8 @@ describe('scope churn regression', () => {
     const scopeSnapshots: string[][] = []
 
     function StableConsumer() {
-      useInputInScope(
-        (_input, _key) => {},
+      useKeyHandler(
+        () => {},
         'list',
         { deps: [] },
       )

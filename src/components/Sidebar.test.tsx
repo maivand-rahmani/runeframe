@@ -4,7 +4,9 @@ import { Box, Text } from 'ink'
 import type { ReactElement } from 'react'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
+import { FocusTreeProvider, useFocusable, useFocusGroup } from '../interaction/FocusTreeProvider.js'
 import { NavigationProvider, useNavigation } from '../navigation/NavigationProvider.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
 import { AppShell } from './AppShell.js'
 import { Sidebar, type SidebarItem } from './Sidebar.js'
@@ -203,6 +205,84 @@ describe('Sidebar', () => {
     const frame = lastFrame()
     expect(frame).toContain('Current: plan')
     expect(frame).toContain('› Plan')
+  })
+
+  it('click focuses and navigates to a bounded sidebar item', async () => {
+    function CurrentScreen() {
+      const { currentScreenId } = useNavigation()
+      return <Text>Current: {currentScreenId}</Text>
+    }
+
+    const { lastFrame, stdin } = render(
+      <FrameworkProvider registry={registry} defaultScreen="dashboard">
+        <Sidebar
+          items={sidebarItems}
+          columns={120}
+          mouseBoundsForItem={(item) =>
+            item.id === 'plan'
+              ? { x: 0, y: 2, width: 12, height: 1 }
+              : undefined
+          }
+        />
+        <CurrentScreen />
+      </FrameworkProvider>,
+    )
+
+    await delay(100)
+    stdin.write('\u001B[<0;1;3M')
+    await delay()
+    stdin.write('\u001B[<0;1;3m')
+    await delay()
+
+    expect(lastFrame()).toContain('Current: plan')
+    expect(lastFrame()).toContain('› Plan')
+  })
+
+  it('moves between the sidebar and content with Tab and horizontal arrows', async () => {
+    function ContentItem() {
+      const { focused } = useFocusable({ id: 'content-focus' })
+      return <Text>Content item focused={String(focused)}</Text>
+    }
+
+    function FocusableContent() {
+      const group = useFocusGroup('content-group', { scope: 'navigation' })
+      return (
+        <group.GroupProvider>
+          <Text>Content group active={String(group.isActive)}</Text>
+          <ContentItem />
+        </group.GroupProvider>
+      )
+    }
+
+    const { lastFrame, stdin } = renderInTheme(
+      <KeyboardScopeProvider>
+        <FocusTreeProvider>
+          <NavigationProvider registry={registry} defaultScreen="dashboard">
+            <AppShell
+              columns={120}
+              sidebar={<Sidebar items={sidebarItems} columns={120} />}
+            >
+              <FocusableContent />
+            </AppShell>
+          </NavigationProvider>
+        </FocusTreeProvider>
+      </KeyboardScopeProvider>,
+    )
+
+    await delay()
+    expect(lastFrame()).toContain('Content group active=false')
+
+    stdin.write('\u001b[C')
+    await delay()
+    expect(lastFrame()).toContain('Content group active=true')
+
+    stdin.write('\u001b[D')
+    await delay()
+    expect(lastFrame()).toContain('Content group active=false')
+
+    stdin.write('\t')
+    await delay()
+    expect(lastFrame()).toContain('Content group active=true')
   })
 
   it('collapses descriptions below medium width while keeping labels visible', async () => {

@@ -3,14 +3,12 @@ import { render } from 'ink-testing-library'
 import { Box, Text } from 'ink'
 import React, { type ReactElement } from 'react'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
-import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
-import { CommandBar } from './CommandBar.js'
 import { ProcessOutputPanel } from './ProcessOutputPanel.js'
-import { useCommandSession } from '../commands/useCommandSession.js'
-import type {
-  CommandSessionAPI,
-  OutputLine,
-} from '../commands/useCommandSession.js'
+import {
+  useAsyncSession,
+  type UseAsyncSessionResult,
+} from '../commands/useAsyncSession.js'
+import type { SessionEvent } from '../commands/AsyncSessionRunner.js'
 import type { ProcessRunner, RunningProcess } from '../commands/ProcessRunner.js'
 
 // ── Mock Process Runner ──
@@ -78,128 +76,146 @@ function delay(ms = 50) {
 }
 
 function renderConsole(ui: ReactElement) {
-  return render(
-    <ThemeProvider>
-      <KeyboardScopeProvider>{ui}</KeyboardScopeProvider>
-    </ThemeProvider>,
+  return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+function stdoutEvent(data: string): SessionEvent {
+  return { type: 'stdout', data, timestamp: 0 }
+}
+
+function stderrEvent(data: string): SessionEvent {
+  return { type: 'stderr', data, timestamp: 0 }
+}
+
+function exitEvent(code: number | null): SessionEvent {
+  return {
+    type: 'exit',
+    data: code === null ? '' : String(code),
+    timestamp: 0,
+    exitCode: code,
+  }
+}
+
+// ── Console Harness ──
+
+type ConsoleMode = 'browse' | 'command' | 'stdin'
+
+interface ConsoleApi {
+  session: UseAsyncSessionResult
+  mode: ConsoleMode
+  input: string
+  activeCommand: string | null
+  setInput: (value: string) => void
+  beginCommand: () => void
+  submit: () => void
+  cancel: () => void
+}
+
+interface ConsoleHarnessProps {
+  onSession?: (api: ConsoleApi) => void
+  showPanel?: boolean
+}
+
+function ConsoleHarness({ onSession, showPanel = true }: ConsoleHarnessProps) {
+  const [runner] = React.useState(createMockRunner)
+  const session = useAsyncSession({ runner })
+  const [mode, setMode] = React.useState<ConsoleMode>('browse')
+  const [input, setInput] = React.useState('')
+  const [activeCommand, setActiveCommand] = React.useState<string | null>(null)
+
+  // Refs stay synchronous with state so the exposed API never acts on a
+  // stale closure (mirrors how an interactive console reads current input).
+  const modeRef = React.useRef<ConsoleMode>('browse')
+  const inputRef = React.useRef('')
+
+  const changeMode = (next: ConsoleMode) => {
+    modeRef.current = next
+    setMode(next)
+  }
+
+  const updateInput = (value: string) => {
+    inputRef.current = value
+    setInput(value)
+  }
+
+  const beginCommand = () => {
+    changeMode('command')
+    updateInput('')
+  }
+
+  const submit = () => {
+    const currentMode = modeRef.current
+    const value = inputRef.current
+
+    if (currentMode === 'stdin') {
+      session.sendInput(value + '\n')
+      updateInput('')
+      return
+    }
+
+    const command = value.trim()
+    if (!command) return
+
+    setActiveCommand(command)
+    session.start(command)
+    changeMode('stdin')
+    updateInput('')
+  }
+
+  const cancel = () => {
+    session.cancel()
+    changeMode('browse')
+    setActiveCommand(null)
+  }
+
+  onSession?.({
+    session,
+    mode,
+    input,
+    activeCommand,
+    setInput: updateInput,
+    beginCommand,
+    submit,
+    cancel,
+  })
+
+  return (
+    <Box flexDirection="column">
+      <Text>Mode:{mode}</Text>
+      <Text>Status:{session.status}</Text>
+      {showPanel && (
+        <ProcessOutputPanel
+          events={session.events}
+          status={session.status}
+          activeCommand={activeCommand}
+        />
+      )}
+    </Box>
   )
 }
 
-/// Helper: activate command mode and type text, then wait for render
-async function activateAndType(api: CommandSessionAPI, text: string) {
-  api.activate()
+/// Helper: open the command prompt and type text, then wait for render
+async function beginAndType(api: ConsoleApi, text: string) {
+  api.beginCommand()
   api.setInput(text)
   await delay()
 }
 
-/// Helper: spawn a command via the API (activate + type + submit)
-async function spawnCommand(api: CommandSessionAPI, cmd: string) {
-  api.activate()
+/// Helper: spawn a command via the API (begin + type + submit)
+async function spawnCommand(api: ConsoleApi, cmd: string) {
+  api.beginCommand()
   api.setInput(cmd)
   await delay()
   api.submit()
   await delay()
 }
 
-// ── Test Setup Component ──
-
-interface ConsoleHarnessProps {
-  onSession?: (api: CommandSessionAPI) => void
-  showBar?: boolean
-  showPanel?: boolean
-}
-
-function ConsoleHarness({
-  onSession,
-  showBar = true,
-  showPanel = true,
-}: ConsoleHarnessProps) {
-  const [runner] = React.useState(createMockRunner)
-  const session = useCommandSession({ runner })
-  onSession?.(session)
-
-  return (
-    <Box flexDirection="column">
-      {showBar && (
-        <CommandBar
-          mode={session.mode}
-          value={session.input}
-          onChange={session.setInput}
-          onSubmit={session.submit}
-        />
-      )}
-      {showPanel && (
-        <ProcessOutputPanel
-          output={session.output}
-          status={session.status}
-          activeCommand={session.activeCommand}
-          exitCode={session.exitCode}
-        />
-      )}
-      <Text>Mode:{session.mode}</Text>
-      <Text>Status:{session.status}</Text>
-    </Box>
-  )
-}
-
-// ── CommandBar Tests ──
-
-describe('CommandBar', () => {
-  it('renders nothing in navigation mode', () => {
-    const { lastFrame } = renderConsole(
-      <CommandBar mode="navigation" value="" onChange={() => {}} onSubmit={() => {}} />,
-    )
-    expect(lastFrame()).toBe('')
-  })
-
-  it('shows prompt and cursor in command mode', () => {
-    const { lastFrame } = renderConsole(
-      <CommandBar mode="command" value="" onChange={() => {}} onSubmit={() => {}} />,
-    )
-    const frame = lastFrame()
-    expect(frame).toContain('>')
-    expect(frame).toContain('|')
-  })
-
-  it('shows placeholder when value is empty in command mode', () => {
-    const { lastFrame } = renderConsole(
-      <CommandBar
-        mode="command"
-        value=""
-        onChange={() => {}}
-        onSubmit={() => {}}
-        placeholder="Enter command..."
-      />,
-    )
-    expect(lastFrame()).toContain('Enter command...')
-  })
-
-  it('shows typed input value', () => {
-    const { lastFrame } = renderConsole(
-      <CommandBar mode="command" value="echo hello" onChange={() => {}} onSubmit={() => {}} />,
-    )
-    expect(lastFrame()).toContain('echo hello')
-  })
-
-  it('shows (stdin) indicator in process mode', () => {
-    const { lastFrame } = renderConsole(
-      <CommandBar mode="process" value="" onChange={() => {}} onSubmit={() => {}} />,
-    )
-    expect(lastFrame()).toContain('stdin')
-  })
-})
-
 // ── ProcessOutputPanel Tests ──
 
 describe('ProcessOutputPanel', () => {
   it('shows idle status by default', () => {
     const { lastFrame } = renderConsole(
-      <ProcessOutputPanel
-        output={[]}
-        status="idle"
-        activeCommand={null}
-        exitCode={null}
-      />,
+      <ProcessOutputPanel events={[]} status="idle" activeCommand={null} />,
     )
     expect(lastFrame()).toContain('Idle')
   })
@@ -207,52 +223,46 @@ describe('ProcessOutputPanel', () => {
   it('shows running status', () => {
     const { lastFrame } = renderConsole(
       <ProcessOutputPanel
-        output={[]}
+        events={[]}
         status="running"
         activeCommand="echo test"
-        exitCode={null}
       />,
     )
     expect(lastFrame()).toContain('Running')
     expect(lastFrame()).toContain('echo test')
   })
 
-  it('shows exited status with exit code', () => {
+  it('shows complete status with exit code', () => {
     const { lastFrame } = renderConsole(
       <ProcessOutputPanel
-        output={[]}
-        status="exited"
+        events={[exitEvent(0)]}
+        status="complete"
         activeCommand="ls"
-        exitCode={0}
       />,
     )
-    expect(lastFrame()).toContain('Exited')
+    expect(lastFrame()).toContain('Complete')
     expect(lastFrame()).toContain('exit 0')
   })
 
-  it('shows non-zero exit code as error', () => {
+  it('shows error status with non-zero exit code', () => {
     const { lastFrame } = renderConsole(
       <ProcessOutputPanel
-        output={[]}
-        status="exited"
+        events={[exitEvent(1)]}
+        status="error"
         activeCommand="bad-command"
-        exitCode={1}
       />,
     )
+    expect(lastFrame()).toContain('Error')
     expect(lastFrame()).toContain('exit 1')
   })
 
   it('renders stdout output lines', () => {
-    const output: OutputLine[] = [
-      { text: 'line one', stream: 'stdout' },
-      { text: 'line two', stream: 'stdout' },
-    ]
+    const events = [stdoutEvent('line one'), stdoutEvent('line two')]
     const { lastFrame } = renderConsole(
       <ProcessOutputPanel
-        output={output}
+        events={events}
         status="running"
         activeCommand="echo"
-        exitCode={null}
       />,
     )
     const frame = lastFrame()
@@ -261,96 +271,156 @@ describe('ProcessOutputPanel', () => {
   })
 
   it('renders stderr output lines', () => {
-    const output: OutputLine[] = [
-      { text: 'error message', stream: 'stderr' },
-    ]
     const { lastFrame } = renderConsole(
       <ProcessOutputPanel
-        output={output}
+        events={[stderrEvent('error message')]}
         status="running"
         activeCommand="cmd"
-        exitCode={null}
       />,
     )
     expect(lastFrame()).toContain('error message')
   })
 
+  it('ignores non-output events when rendering lines', () => {
+    const events: SessionEvent[] = [
+      { type: 'status', data: 'running', timestamp: 0 },
+      stdoutEvent('real output'),
+    ]
+    const { lastFrame } = renderConsole(
+      <ProcessOutputPanel
+        events={events}
+        status="running"
+        activeCommand="cmd"
+      />,
+    )
+    expect(lastFrame()).toContain('real output')
+    expect(lastFrame()).not.toContain('status')
+  })
+
   it('shows waiting message while running with no output', () => {
     const { lastFrame } = renderConsole(
       <ProcessOutputPanel
-        output={[]}
+        events={[]}
         status="running"
         activeCommand="sleep"
-        exitCode={null}
       />,
     )
     expect(lastFrame()).toContain('Waiting for output')
   })
+
+  it('drops older lines beyond maxVisibleLines', () => {
+    const events = [
+      stdoutEvent('old line'),
+      stdoutEvent('middle line'),
+      stdoutEvent('new line'),
+    ]
+    const { lastFrame } = renderConsole(
+      <ProcessOutputPanel
+        events={events}
+        status="complete"
+        activeCommand="cmd"
+        maxVisibleLines={2}
+      />,
+    )
+    const frame = lastFrame()
+    expect(frame).not.toContain('old line')
+    expect(frame).toContain('middle line')
+    expect(frame).toContain('new line')
+  })
 })
 
-// ── useCommandSession Integration Tests ──
+// ── useAsyncSession Integration Tests ──
 
-describe('useCommandSession', () => {
+describe('useAsyncSession console flow', () => {
   beforeEach(() => {
     lastMockProcess = null
   })
 
-  it('starts in navigation mode', async () => {
+  it('starts in browse mode and idle status', async () => {
     const { lastFrame } = renderConsole(<ConsoleHarness />)
-    expect(lastFrame()).toContain('Mode:navigation')
+    expect(lastFrame()).toContain('Mode:browse')
     expect(lastFrame()).toContain('Status:idle')
   })
 
-  it('activate switches to command mode', async () => {
-    let api!: CommandSessionAPI
+  it('beginCommand switches to command mode', async () => {
+    let api!: ConsoleApi
     const { lastFrame } = renderConsole(
-      <ConsoleHarness onSession={(s) => { api = s }} />,
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
     )
     await delay()
 
-    api.activate()
+    api.beginCommand()
     await delay()
 
     expect(lastFrame()).toContain('Mode:command')
   })
 
-  it('enter text via setInput in command mode', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+  it('accepts input in command mode', async () => {
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
-    await activateAndType(api, 'echo hello')
+    await beginAndType(api, 'echo hello')
     expect(api.input).toBe('echo hello')
   })
 
-  it('submit spawns process and switches to process mode', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+  it('submit spawns process and switches to stdin mode', async () => {
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
     await spawnCommand(api, 'echo hello')
 
-    expect(api.mode).toBe('process')
-    expect(api.status).toBe('running')
+    expect(api.mode).toBe('stdin')
+    expect(api.session.status).toBe('running')
     expect(api.activeCommand).toBe('echo hello')
   })
 
   it('submitting empty input in command mode does nothing', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
-    api.activate()
+    api.beginCommand()
     await delay()
     api.submit()
     await delay()
 
     expect(api.mode).toBe('command')
+    expect(api.session.status).toBe('idle')
   })
 
   it('accumulates stdout output from process', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
     await spawnCommand(api, 'echo hello')
@@ -359,14 +429,20 @@ describe('useCommandSession', () => {
     lastMockProcess!.emitStdout('hello\n')
     await delay()
 
-    expect(api.output.length).toBe(1)
-    expect(api.output[0].text).toBe('hello\n')
-    expect(api.output[0].stream).toBe('stdout')
+    expect(api.session.output.length).toBe(1)
+    expect(api.session.output[0]!.data).toBe('hello\n')
+    expect(api.session.output[0]!.type).toBe('stdout')
   })
 
   it('accumulates stderr output from process', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
     await spawnCommand(api, 'cmd')
@@ -374,13 +450,19 @@ describe('useCommandSession', () => {
     lastMockProcess!.emitStderr('error\n')
     await delay()
 
-    expect(api.output.length).toBe(1)
-    expect(api.output[0].stream).toBe('stderr')
+    expect(api.session.output.length).toBe(1)
+    expect(api.session.output[0]!.type).toBe('stderr')
   })
 
-  it('send stdin via submit in process mode', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+  it('sends stdin via submit in stdin mode', async () => {
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
     await spawnCommand(api, 'cat')
@@ -393,9 +475,15 @@ describe('useCommandSession', () => {
     expect(lastMockProcess!.stdinData).toContain('some input\n')
   })
 
-  it('empty submit sends newline in process mode', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+  it('empty submit sends newline in stdin mode', async () => {
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
     await spawnCommand(api, 'cat')
@@ -406,90 +494,83 @@ describe('useCommandSession', () => {
     expect(lastMockProcess!.stdinData).toContain('\n')
   })
 
-  it('kill terminates the process', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+  it('cancel terminates the process and returns to browse', async () => {
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
     await spawnCommand(api, 'sleep 10')
 
-    expect(api.mode).toBe('process')
-    expect(api.status).toBe('running')
+    expect(api.mode).toBe('stdin')
+    expect(api.session.status).toBe('running')
 
-    api.kill()
+    api.cancel()
     await delay()
 
     expect(lastMockProcess!.wasKilled).toBe(true)
-    expect(api.mode).toBe('navigation')
-    expect(api.status).toBe('idle')
+    expect(api.mode).toBe('browse')
+    expect(api.session.status).toBe('idle')
   })
 
-  it('deactivate returns to navigation mode', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
-    await delay()
-
-    api.activate()
-    await delay()
-    expect(api.mode).toBe('command')
-
-    api.deactivate()
-    await delay()
-    expect(api.mode).toBe('navigation')
-  })
-
-  it('clearOutput empties the output array', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
-    await delay()
-
-    await spawnCommand(api, 'cmd')
-
-    lastMockProcess!.emitStdout('data\n')
-    await delay()
-    expect(api.output.length).toBeGreaterThan(0)
-
-    api.clearOutput()
-    await delay()
-    expect(api.output.length).toBe(0)
-  })
-
-  it('process exit transitions status to exited', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+  it('process exit transitions status to complete and shows the exit code', async () => {
+    let api!: ConsoleApi
+    const { lastFrame } = renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
     await spawnCommand(api, 'echo')
 
-    expect(api.status).toBe('running')
+    expect(api.session.status).toBe('running')
 
     lastMockProcess!.emitExit(0)
     await delay()
 
-    expect(api.status).toBe('exited')
-    expect(api.exitCode).toBe(0)
-    expect(api.mode).toBe('process')
+    expect(api.session.status).toBe('complete')
+    expect(api.session.exitCode).toBe(0)
+    expect(api.mode).toBe('stdin')
+    expect(lastFrame()).toContain('exit 0')
   })
 
-  it('adds (stdin) forwarding keyboard in process mode via escape to kill', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+  it('non-zero exit transitions status to error', async () => {
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
-    await spawnCommand(api, 'less')
+    await spawnCommand(api, 'exit 1')
 
-    expect(api.mode).toBe('process')
-
-    api.kill()
+    lastMockProcess!.emitExit(1)
     await delay()
 
-    expect(api.mode).toBe('navigation')
-    expect(lastMockProcess!.wasKilled).toBe(true)
+    expect(api.session.status).toBe('error')
+    expect(api.session.exitCode).toBe(1)
   })
 
   it('handles multiple spawns sequentially', async () => {
-    let api!: CommandSessionAPI
-    renderConsole(<ConsoleHarness onSession={(s) => { api = s }} />)
+    let api!: ConsoleApi
+    renderConsole(
+      <ConsoleHarness
+        onSession={(s) => {
+          api = s
+        }}
+      />,
+    )
     await delay()
 
     await spawnCommand(api, 'echo first')
@@ -497,32 +578,33 @@ describe('useCommandSession', () => {
     await delay()
     expect(api.activeCommand).toBe('echo first')
 
-    api.activate()
+    api.beginCommand()
     api.setInput('echo second')
     await delay()
     api.submit()
     await delay()
+
     expect(api.activeCommand).toBe('echo second')
-    expect(api.status).toBe('running')
+    expect(api.session.status).toBe('running')
+    expect(api.session.events.filter((e) => e.type === 'stdout')).toHaveLength(0)
   })
 })
 
-// ── Output Line Rendering Tests ──
+// ── SessionEvent Rendering Tests ──
 
-describe('OutputLine rendering', () => {
+describe('SessionEvent rendering', () => {
   it('renders multiple output lines in order', () => {
-    const output: OutputLine[] = [
-      { text: 'first', stream: 'stdout' },
-      { text: 'second', stream: 'stdout' },
-      { text: 'third', stream: 'stdout' },
+    const events = [
+      stdoutEvent('first'),
+      stdoutEvent('second'),
+      stdoutEvent('third'),
     ]
 
     const { lastFrame } = renderConsole(
       <ProcessOutputPanel
-        output={output}
-        status="exited"
+        events={events}
+        status="complete"
         activeCommand="test"
-        exitCode={0}
       />,
     )
 

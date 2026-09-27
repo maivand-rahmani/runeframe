@@ -7,7 +7,6 @@ import { HotkeyHintBar } from './HotkeyHintBar.js'
 
 export interface StatusBarProps {
   mode?: string
-  shortcuts?: { key?: string; keys?: string; description: string; scope?: string }[]
   columns?: number
   /** Optional — when provided, auto-generates footer hints from the action registry. */
   registry?: ActionRegistry
@@ -15,7 +14,6 @@ export interface StatusBarProps {
 
 export function StatusBar({
   mode,
-  shortcuts,
   columns = LAYOUT.narrow + 1,
   registry,
 }: StatusBarProps) {
@@ -23,20 +21,15 @@ export function StatusBar({
   const isCompact = columns < LAYOUT.narrow
 
   const hasMode = mode != null
-  const hasShortcuts = shortcuts != null && shortcuts.length > 0
   const hasRegistry = registry != null
 
-  if (!hasMode && !hasShortcuts && !hasRegistry) {
+  if (!hasMode && !hasRegistry) {
     return null
   }
 
-  const displayShortcuts = isCompact
-    ? (shortcuts ?? []).slice(0, 2)
-    : (shortcuts ?? [])
-
   const registryHints = hasRegistry ? (
     <ScopedActionRegistryProvider registry={registry}>
-      <HotkeyHintBar />
+      <HotkeyHintBar maxHints={isCompact ? 2 : undefined} />
     </ScopedActionRegistryProvider>
   ) : null
 
@@ -49,14 +42,6 @@ export function StatusBar({
       </Box>
 
       <Box flexDirection="row" gap={theme.spacing.sm}>
-        {displayShortcuts.map((shortcut, index) => {
-          const keyLabel = shortcut.keys ?? shortcut.key ?? ''
-          return (
-            <Text key={`${keyLabel}-${index}`} color={theme.colors.text.secondary}>
-              [{keyLabel}] {shortcut.description}
-            </Text>
-          )
-        })}
         {registryHints}
       </Box>
     </Box>

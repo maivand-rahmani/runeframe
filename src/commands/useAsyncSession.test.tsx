@@ -14,9 +14,7 @@ function createMockRunner() {
 
   const process: RunningProcess = {
     sendStdin: vi.fn(),
-    kill: vi.fn(() => {
-      exitCb?.(null)
-    }),
+    kill: vi.fn(),
     onStdout: vi.fn((cb: (data: string) => void) => {
       stdoutCb = cb
       return () => {
@@ -38,7 +36,7 @@ function createMockRunner() {
   }
 
   const runner: ProcessRunner = {
-    spawn: vi.fn(() => process),
+    spawn: vi.fn((_command: string, _args?: string[]) => process),
   }
 
   return {
@@ -63,36 +61,42 @@ interface HookCaptured {
   isRunning: boolean
   isComplete: boolean
   isError: boolean
+  exitCode: number | null
   outputLen: number
   eventsLen: number
   lastEventType: string | null
-  start: (command: string) => void
+  start: (command: string, args?: string[]) => void
   sendInput: (data: string) => void
   cancel: () => void
+  cleanup: () => void
 }
 
 function TestHarness({
   runner,
   autoCleanup,
+  maxOutputLines,
   onCapture,
 }: {
   runner: ProcessRunner
   autoCleanup?: boolean
+  maxOutputLines?: number
   onCapture: (captured: HookCaptured) => void
 }) {
-  const session = useAsyncSession({ runner, autoCleanup })
+  const session = useAsyncSession({ runner, autoCleanup, maxOutputLines })
 
   const captured: HookCaptured = {
     status: session.status,
     isRunning: session.isRunning,
     isComplete: session.isComplete,
     isError: session.isError,
+    exitCode: session.exitCode,
     outputLen: session.output.length,
     eventsLen: session.events.length,
     lastEventType: session.lastEvent?.type ?? null,
     start: session.start,
     sendInput: session.sendInput,
     cancel: session.cancel,
+    cleanup: session.cleanup,
   }
 
   React.useEffect(() => {
@@ -127,6 +131,7 @@ describe('useAsyncSession', () => {
     expect(captured!.isRunning).toBe(false)
     expect(captured!.isComplete).toBe(false)
     expect(captured!.isError).toBe(false)
+    expect(captured!.exitCode).toBeNull()
     expect(captured!.lastEventType).toBeNull()
   })
 
@@ -150,8 +155,28 @@ describe('useAsyncSession', () => {
     expect(lastFrame()).toContain('running|true|false|false|0')
   })
 
-  it('cancel transitions back to idle', () => {
+  it('start forwards args to the runner', () => {
     const { runner } = createMockRunner()
+    let captured: HookCaptured | null = null
+
+    render(
+      <TestHarness
+        runner={runner}
+        onCapture={(c) => {
+          captured = c
+        }}
+      />,
+    )
+
+    act(() => {
+      captured!.start('git', ['log', '--oneline'])
+    })
+
+    expect(runner.spawn).toHaveBeenCalledWith('git', ['log', '--oneline'])
+  })
+
+  it('cancel transitions back to idle', () => {
+    const { runner, process } = createMockRunner()
     let captured: HookCaptured | null = null
 
     const { lastFrame } = render(
@@ -174,6 +199,36 @@ describe('useAsyncSession', () => {
     })
 
     expect(lastFrame()).toContain('idle|false|false|false|0')
+    expect(process.kill).toHaveBeenCalled()
+  })
+
+  it('cancel is a no-op once the process has completed', () => {
+    const { runner, emitExit } = createMockRunner()
+    let captured: HookCaptured | null = null
+
+    render(
+      <TestHarness
+        runner={runner}
+        onCapture={(c) => {
+          captured = c
+        }}
+      />,
+    )
+
+    act(() => {
+      captured!.start('echo hello')
+    })
+
+    act(() => {
+      emitExit(0)
+    })
+
+    act(() => {
+      captured!.cancel()
+    })
+
+    expect(captured!.status).toBe('complete')
+    expect(captured!.exitCode).toBe(0)
   })
 
   it('tracks stdout output in the output array', () => {
@@ -226,6 +281,7 @@ describe('useAsyncSession', () => {
     expect(lastFrame()).toContain('complete|false|true|false|0')
     expect(captured!.isComplete).toBe(true)
     expect(captured!.isRunning).toBe(false)
+    expect(captured!.exitCode).toBe(0)
   })
 
   it('derived booleans match status when process errors', () => {
@@ -251,6 +307,7 @@ describe('useAsyncSession', () => {
 
     expect(lastFrame()).toContain('error|false|false|true|0')
     expect(captured!.isError).toBe(true)
+    expect(captured!.exitCode).toBe(1)
   })
 
   it('sendInput delegates to the runner', () => {
@@ -299,5 +356,108 @@ describe('useAsyncSession', () => {
     })
 
     expect(captured!.lastEventType).toBe('stdout')
+  })
+
+  it('bounds retained events with maxOutputLines', () => {
+    const { runner, emitStdout } = createMockRunner()
+    let captured: HookCaptured | null = null
+
+    render(
+      <TestHarness
+        runner={runner}
+        maxOutputLines={4}
+        onCapture={(c) => {
+          captured = c
+        }}
+      />,
+    )
+
+    act(() => {
+      captured!.start('long-command')
+    })
+
+    act(() => {
+      for (let i = 0; i < 20; i++) {
+        emitStdout(`line ${i}\n`)
+      }
+    })
+
+    expect(captured!.eventsLen).toBeLessThanOrEqual(4)
+    expect(captured!.outputLen).toBeLessThanOrEqual(4)
+  })
+
+  it('cleanup resets state and stops the process', () => {
+    const { runner, process, emitStdout } = createMockRunner()
+    let captured: HookCaptured | null = null
+
+    const { lastFrame } = render(
+      <TestHarness
+        runner={runner}
+        onCapture={(c) => {
+          captured = c
+        }}
+      />,
+    )
+
+    act(() => {
+      captured!.start('sleep 999')
+    })
+
+    act(() => {
+      emitStdout('output\n')
+    })
+
+    act(() => {
+      captured!.cleanup()
+    })
+
+    expect(process.kill).toHaveBeenCalled()
+    expect(lastFrame()).toContain('idle|false|false|false|0')
+    expect(captured!.eventsLen).toBe(0)
+  })
+
+  it('stops the process on unmount by default', () => {
+    const { runner, process } = createMockRunner()
+    let captured: HookCaptured | null = null
+
+    const { unmount } = render(
+      <TestHarness
+        runner={runner}
+        onCapture={(c) => {
+          captured = c
+        }}
+      />,
+    )
+
+    act(() => {
+      captured!.start('sleep 999')
+    })
+
+    unmount()
+
+    expect(process.kill).toHaveBeenCalled()
+  })
+
+  it('keeps the process running on unmount when autoCleanup is false', () => {
+    const { runner, process } = createMockRunner()
+    let captured: HookCaptured | null = null
+
+    const { unmount } = render(
+      <TestHarness
+        runner={runner}
+        autoCleanup={false}
+        onCapture={(c) => {
+          captured = c
+        }}
+      />,
+    )
+
+    act(() => {
+      captured!.start('sleep 999')
+    })
+
+    unmount()
+
+    expect(process.kill).not.toHaveBeenCalled()
   })
 })

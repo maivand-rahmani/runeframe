@@ -3,7 +3,7 @@
   "changelog": [
     "@changesets/changelog-github",
     {
-      "repo": "maivand-rahmani/englishos-tui-framework"
+      "repo": "maivand-rahmani/runeframe"
     }
   ],
   "commit": false,

@@ -20,6 +20,23 @@ export interface ScopedInputEvent {
 
 export type InputHandler = (event: ScopedInputEvent) => void | boolean
 
+/**
+ * One raw input event exactly as Ink's single `useInput` subscription
+ * delivered it. Retained by interceptors so replay preserves the original
+ * `(input, key)` pair instead of concatenating text.
+ */
+export interface RawInputEvent {
+  input: string
+  key: Key
+}
+
+/**
+ * Runs before ordinary keyboard dispatch. Returning `true` consumes the event
+ * for this subscription pass (interceptors may dispatch retained records
+ * through {@link KeyboardScopeContextValue.dispatchInputEvent} themselves).
+ */
+export type InputInterceptor = (event: RawInputEvent) => boolean | void
+
 interface RegisteredHandler {
   id: number
   priority: number
@@ -48,6 +65,17 @@ export interface KeyboardScopeContextValue {
   restoreShell: () => void
   /** Whether shell shortcuts are currently suspended. */
   shellSuspended: boolean
+  /**
+   * @internal Register a raw-input interceptor that runs before ordinary
+   * keyboard handlers. Returns an idempotent unregister function.
+   */
+  registerInputInterceptor: (interceptor: InputInterceptor) => () => void
+  /**
+   * @internal Route one retained raw input record through the ordinary
+   * keyboard dispatcher, bypassing interceptors. Used to replay buffered
+   * records unchanged.
+   */
+  dispatchInputEvent: (event: RawInputEvent) => void
 }
 
 const KeyboardScopeContext =
@@ -95,9 +123,26 @@ export function KeyboardScopeProvider({
     setShellSuspended(false)
   }, [])
 
+  // ── Raw Input Interception ────────────────────────────────────────
+
+  const interceptorsRef = useRef<Map<number, InputInterceptor>>(new Map())
+  const interceptorCounterRef = useRef(0)
+
+  const registerInputInterceptor = useCallback(
+    (interceptor: InputInterceptor) => {
+      const id = interceptorCounterRef.current++
+      interceptorsRef.current.set(id, interceptor)
+      return () => {
+        // Deleting a missing entry keeps cleanup idempotent.
+        interceptorsRef.current.delete(id)
+      }
+    },
+    [],
+  )
+
   // ── Input Dispatch ────────────────────────────────────────────────
 
-  useInput((input, key) => {
+  const dispatchInputEvent = useCallback(({ input, key }: RawInputEvent) => {
     const entries = scopeEntriesRef.current
 
     // Iterate from deepest (last) to shallowest (first)
@@ -139,6 +184,18 @@ export function KeyboardScopeProvider({
       // Trap: don't bubble past this scope
       if (entry.trapsInput) return
     }
+  }, [])
+
+  useInput((input, key) => {
+    const event: RawInputEvent = { input, key }
+
+    if (interceptorsRef.current.size > 0) {
+      for (const interceptor of [...interceptorsRef.current.values()]) {
+        if (interceptor(event) === true) return
+      }
+    }
+
+    dispatchInputEvent(event)
   })
 
   // ── Handler Registration ──────────────────────────────────────────
@@ -244,6 +301,8 @@ export function KeyboardScopeProvider({
         suspendShell,
         restoreShell,
         shellSuspended,
+        registerInputInterceptor,
+        dispatchInputEvent,
       }}
     >
       {children}

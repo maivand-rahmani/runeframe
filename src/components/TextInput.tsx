@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Box, Text } from 'ink'
-import { useInputInScope } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
 
@@ -58,11 +58,11 @@ export function TextInput({
     return () => restore()
   }, [suspend, restore])
 
-  useInputInScope(
-    (input, key) => {
+  useKeyHandler(
+    (event) => {
       const h = ref.current
 
-      if (key.return) {
+      if (event.enter) {
         if (h.validate) {
           const validationError = h.validate(h.value)
           if (validationError !== null) {
@@ -75,13 +75,13 @@ export function TextInput({
         return true
       }
 
-      if (key.escape) {
+      if (event.escape) {
         h.setError(null)
         h.onCancel?.()
         return true
       }
 
-      if (key.backspace) {
+      if (event.backspace) {
         const newValue = h.value.slice(0, -1)
         if (!h.isControlled) {
           h.setInternalValue(newValue)
@@ -91,11 +91,11 @@ export function TextInput({
         return true
       }
 
-      if (input.length === 1 && input >= ' ' && input <= '~') {
+      if (event.isPrintable) {
         if (h.maxLength !== undefined && h.value.length >= h.maxLength) {
           return true
         }
-        const newValue = h.value + input
+        const newValue = h.value + event.text
         if (!h.isControlled) {
           h.setInternalValue(newValue)
         }

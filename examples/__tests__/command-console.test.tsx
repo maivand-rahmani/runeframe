@@ -8,6 +8,7 @@ describe('command-console integration', () => {
   it('renders the console UI without crashing', () => {
     const { lastFrame } = render(<App />)
     const frame = normalizeFrame(lastFrame())
-    expect(frame).toContain('Command Console Demo')
+    expect(frame).toContain('Command Console')
+    expect(frame).toContain('Press Enter to type a command.')
   })
 })

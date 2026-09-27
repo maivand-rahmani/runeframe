@@ -2,7 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
-import { useKeyHandler } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { InputConsumptionResult } from '../types.js'
 import type { Action } from '../commands/ActionRegistry.js'
 

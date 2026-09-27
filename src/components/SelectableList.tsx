@@ -6,6 +6,8 @@ export interface SelectableListProps<T extends ListItem>
   items: T[]
   filterQuery?: string
   filterFn?: (item: T, query: string) => boolean
+  /** Bounds are resolved for visible filtered rows, using their displayed index. */
+  mouseBoundsForItem?: ListProps<T>['mouseBoundsForItem']
 }
 
 function defaultFilter<T extends ListItem>(

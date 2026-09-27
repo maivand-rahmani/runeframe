@@ -1,6 +1,20 @@
-// @maivandrahmani/englishos-tui-framework — stable barrel exports
+// runeframe — stable barrel exports
 export type * from './types.js'
+export { InputConsumptionResult } from './types.js'
 export * from './constants.js'
+export {
+  normalizeKey,
+  KEY_ENTER,
+  KEY_ESCAPE,
+  KEY_TAB,
+  KEY_BACKSPACE,
+  KEY_DELETE,
+  KEY_UP,
+  KEY_DOWN,
+  KEY_LEFT,
+  KEY_RIGHT,
+  KEY_SPACE,
+} from './interaction/KeyEventNormalizer.js'
 export * from './design-system/tokens.js'
 export { ThemeProvider, useTheme } from './design-system/ThemeProvider.js'
 export { FrameworkProvider } from './FrameworkProvider.js'
@@ -28,26 +42,15 @@ export type { EmptyStateProps } from './components/EmptyState.js'
 export { LoadingState } from './components/LoadingState.js'
 export type { LoadingStateProps } from './components/LoadingState.js'
 export type { ScreenDefinition, ScreenCategory } from './screens/screen.js'
-export {
-  NavigationProvider,
-  useNavigation,
-  useNavigationState,
-  useNavigationActions,
-  useModalState,
-  useModalActions,
-} from './navigation/NavigationProvider.js'
+export { NavigationProvider, useNavigation } from './navigation/NavigationProvider.js'
 export type {
   NavigationEntry,
   ModalEntry,
   NavigationContextValue,
-  NavigationStateValue,
-  NavigationActionsValue,
-  ModalStateValue,
-  ModalActionsValue,
   NavigationProviderProps,
 } from './navigation/NavigationProvider.js'
 export { ScreenRegistry } from './screens/registry.js'
-export { ScreenProvider, useScreen, ScreenRenderer } from './screens/ScreenProvider.js'
+export { ScreenOutlet } from './screens/ScreenOutlet.js'
 export { StatusBar } from './components/StatusBar.js'
 export type { StatusBarProps } from './components/StatusBar.js'
 export { HotkeyHintBar } from './components/HotkeyHintBar.js'
@@ -66,23 +69,17 @@ export type {
 } from './components/Sidebar.js'
 export { KeyboardScopeProvider, useKeyboardScope, useShellSuspension } from './interaction/KeyboardScopeProvider.js'
 export type { ScopeStackEntry } from './interaction/KeyboardScopeProvider.js'
-export { useInputInScope } from './interaction/useInputInScope.js'
-export { useScopedInputInScope } from './interaction/useInputInScope.js'
+export { useKeyHandler, useKeyBinding } from './interaction/useKeyHandler.js'
 export type {
-  LegacyInputHandler,
-  ScopedInputHandler,
-  UseInputInScopeOptions,
-} from './interaction/useInputInScope.js'
-export { FocusScope, useFocusScope } from './interaction/FocusScope.js'
-export type { FocusScopeProps, FocusScopeContextValue } from './interaction/FocusScope.js'
-export { useFocusable } from './interaction/useFocusable.js'
-export type { UseFocusableOptions, UseFocusableResult } from './interaction/useFocusable.js'
+  KeyHandler,
+  KeyBindingOptions,
+  UseKeyHandlerOptions,
+} from './interaction/useKeyHandler.js'
 export {
   FocusTreeProvider,
-  FocusZoneContext,
   useFocusZone,
   useFocusGroup,
-  useFocusableV2,
+  useFocusable,
 } from './interaction/FocusTreeProvider.js'
 export type {
   FocusZoneContextValue,
@@ -91,14 +88,10 @@ export type {
   UseFocusZoneResult,
   UseFocusGroupOptions,
   UseFocusGroupResult,
-  UseFocusableV2Options,
-  UseFocusableV2Result,
+  UseFocusableOptions,
+  UseFocusableResult,
   FocusTreeProviderProps,
 } from './interaction/FocusTreeProvider.js'
-export { RegionProvider, useRegionContext, useFocusableRegion } from './interaction/RegionProvider.js'
-export type { RegionFocusContextValue, UseFocusableRegionResult, RegionProviderProps } from './interaction/RegionProvider.js'
-export { useInputInRegion, useScopedInputInRegion } from './interaction/useInputInRegion.js'
-export type { LegacyInputHandler as LegacyRegionInputHandler, ScopedInputHandler as ScopedRegionInputHandler } from './interaction/useInputInRegion.js'
 export { ActionRegistry } from './commands/ActionRegistry.js'
 export type { Action, ActionMatch } from './commands/ActionRegistry.js'
 export {
@@ -115,25 +108,22 @@ export { CommandPalette } from './components/CommandPalette.js'
 export type { CommandPaletteProps } from './components/CommandPalette.js'
 export { NodeProcessRunner } from './commands/ProcessRunner.js'
 export type { ProcessRunner, RunningProcess } from './commands/ProcessRunner.js'
-export { useCommandSession } from './commands/useCommandSession.js'
+export {
+  AsyncSessionRunner,
+  DEFAULT_MAX_OUTPUT_LINES,
+} from './commands/AsyncSessionRunner.js'
 export type {
-  CommandSessionMode,
   SessionStatus,
-  UseCommandSessionOptions,
-  CommandSessionAPI,
-  OutputLine,
-} from './commands/useCommandSession.js'
-export { AsyncSessionRunner } from './commands/AsyncSessionRunner.js'
-export type {
-  SessionStatus as AsyncSessionStatus,
-  SessionOptions as AsyncSessionOptions,
+  SessionOptions,
   SessionEvent,
+  SessionEventType,
   SessionLifecycle,
 } from './commands/AsyncSessionRunner.js'
 export { useAsyncSession } from './commands/useAsyncSession.js'
-export type { UseAsyncSessionOptions } from './commands/useAsyncSession.js'
-export { CommandBar } from './components/CommandBar.js'
-export type { CommandBarProps } from './components/CommandBar.js'
+export type {
+  UseAsyncSessionOptions,
+  UseAsyncSessionResult,
+} from './commands/useAsyncSession.js'
 export { ProcessOutputPanel } from './components/ProcessOutputPanel.js'
 export type { ProcessOutputPanelProps } from './components/ProcessOutputPanel.js'
 export { ModalProvider, useModal } from './components/ModalProvider.js'
@@ -178,5 +168,11 @@ export { EventTracer } from './interaction/EventTracer.js'
 export type { TraceEntry } from './interaction/EventTracer.js'
 export { KeyboardDebugInspector } from './interaction/KeyboardDebugInspector.js'
 export type { KeyboardDebugInspectorProps } from './interaction/KeyboardDebugInspector.js'
+export { MouseArea } from './interaction/MouseArea.js'
+export type {
+  MouseAreaProps,
+  MouseBounds,
+  MouseClickEvent,
+} from './interaction/MouseArea.js'
 
 export * as experimental from './experimental/index.js'

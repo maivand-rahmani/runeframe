@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import type { ReactElement } from 'react'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
@@ -10,9 +10,37 @@ import {
 } from '../design-system/tokens.js'
 import type { ThemeTokens } from '../types.js'
 import { Button, resolveButtonAppearance } from './Button.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
+import { ScreenRegistry } from '../screens/registry.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+const interactionRegistry = new ScreenRegistry()
+interactionRegistry.register({
+  id: 'test',
+  title: 'Test',
+  component: () => null,
+})
+
+function renderInFramework(ui: ReactElement) {
+  return render(
+    <FrameworkProvider registry={interactionRegistry} defaultScreen="test">
+      {ui}
+    </FrameworkProvider>,
+  )
+}
+
+function delay(ms = 50) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function clickAt(stdin: { write: (data: string) => void }, x: number, y: number) {
+  stdin.write(`\u001B[<0;${x};${y}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
 }
 
 const theme: ThemeTokens = {
@@ -67,6 +95,75 @@ describe('Button', () => {
     const { lastFrame } = renderInTheme(<Button>Safe Defaults</Button>)
 
     expect(lastFrame()).toContain('[Safe Defaults]')
+  })
+
+  it('activates a focused button with Enter and within explicit mouse bounds', async () => {
+    const onActivate = vi.fn()
+    const { stdin } = renderInFramework(
+      <Button
+        focused
+        onActivate={onActivate}
+        mouseBounds={{ x: 2, y: 3, width: 4, height: 1 }}
+      >
+        Save
+      </Button>,
+    )
+
+    await delay()
+    stdin.write('\r')
+    await delay()
+    expect(onActivate).toHaveBeenCalledTimes(1)
+
+    await clickAt(stdin, 3, 4)
+    expect(onActivate).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps keyboard-only activation available without mouse bounds', async () => {
+    const onActivate = vi.fn()
+    const { stdin } = renderInFramework(
+      <Button focused onActivate={onActivate}>
+        Continue
+      </Button>,
+    )
+
+    await delay()
+    stdin.write('\r')
+    await delay()
+
+    expect(onActivate).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not activate from Enter while unfocused', async () => {
+    const onActivate = vi.fn()
+    const { stdin } = renderInFramework(
+      <Button onActivate={onActivate}>Continue</Button>,
+    )
+
+    await delay()
+    stdin.write('\r')
+    await delay()
+
+    expect(onActivate).not.toHaveBeenCalled()
+  })
+
+  it('does not activate a disabled button from keyboard or mouse', async () => {
+    const onActivate = vi.fn()
+    const { stdin } = renderInFramework(
+      <Button
+        focused
+        disabled
+        onActivate={onActivate}
+        mouseBounds={{ x: 0, y: 0, width: 3, height: 1 }}
+      >
+        Locked
+      </Button>,
+    )
+
+    await delay()
+    stdin.write('\r')
+    await delay()
+    await clickAt(stdin, 1, 1)
+    expect(onActivate).not.toHaveBeenCalled()
   })
 
   it('resolves variant and state appearance from theme tokens', () => {

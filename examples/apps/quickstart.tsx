@@ -21,7 +21,7 @@ registry.register({
 function Shell() {
   const { currentScreen } = useNavigation()
   return (
-    <AppShell topBar={<TopBar appName="Framework Demo" screenTitle={currentScreen.title} />}>
+    <AppShell topBar={<TopBar appName="Runeframe" screenTitle={currentScreen.title} />}>
       <ScreenOutlet />
     </AppShell>
   )

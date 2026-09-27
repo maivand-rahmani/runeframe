@@ -1,41 +1,50 @@
-# Standalone Repository Setup
+# Repository Setup
 
-This package is maintained inside the monorepo, but is designed to be extracted into its own repository and published independently.
+Runeframe is a standalone, ESM-only npm package for Node.js `>= 22`. This document covers local setup, verification, and release prerequisites.
 
-## 1. Extract with history
+## Requirements
 
-From the monorepo root:
+- Node.js `>= 22`
+- npm with the committed `package-lock.json`
 
-```bash
-./packages/tui-framework/scripts/extract-standalone.sh
-```
-
-Default output path:
-
-`../englishos-tui-framework`
-
-## 2. Connect to new GitHub repository
+## Install
 
 ```bash
-cd ../englishos-tui-framework
-git remote remove origin
-git remote add origin git@github.com:<org-or-user>/tui-framework.git
-git push -u origin main
+npm ci
 ```
 
-## 3. Configure repository settings
+## Verify
 
-- Enable branch protection on `main`
-- Require checks from `.github/workflows/ci.yml`
-- Add repository secret `NPM_TOKEN`
-- Ensure Actions permission allows PR creation and contents write
+```bash
+npm run typecheck               # tsc --noEmit
+npm test                        # unit tests (src)
+npm run test:integration:smoke  # integration smoke (examples/__tests__)
+npm run test:integration:full   # integration suite, verbose
+npm run pack:check              # build + packed-consumer ESM-only check
+```
 
-## 4. Publish flow
+The integration suite runs through `vitest.integration.config.ts` against the example apps in `examples/apps/`.
 
-- Add a changeset: `npm run changeset`
-- Merge to `main`
-- `release.yml` creates/updates release PR
-- Merging the release PR publishes with:
-  - `--tag beta`
-  - `--provenance`
-  - `--access public`
+## Build
+
+```bash
+npm run build
+```
+
+`tsup` builds ESM output and type declarations into `dist/` from the two entry points, `src/index.ts` and `src/experimental/index.ts`. The published `exports` map is import-only: there is no CommonJS build.
+
+## Repository settings
+
+- Protect `main`.
+- Require the `test-build` job from `.github/workflows/ci.yml`: install, typecheck, unit tests, and pack check. The integration smoke step is advisory (`continue-on-error`).
+- Allow Actions to create pull requests and write repository contents.
+
+## Release
+
+Releases run through Changesets on `main`:
+
+1. Add a changeset with `npm run changeset`.
+2. Merge to `main`; `.github/workflows/release.yml` opens or updates a release PR.
+3. Merging that PR runs `npm run changeset:version` and publishes with `npm run publish:release`.
+
+The release workflow requires `contents: write`, `pull-requests: write`, and `id-token: write` permissions.

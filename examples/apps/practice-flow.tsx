@@ -17,10 +17,10 @@ import {
 // ── Practice track options ──
 
 const TRACKS = [
-  { value: 'grammar', label: 'Grammar', key: 'g', description: 'Practice grammar exercises' },
-  { value: 'vocabulary', label: 'Vocabulary', key: 'v', description: 'Build your vocabulary' },
-  { value: 'listening', label: 'Listening', key: 'l', description: 'Improve listening comprehension' },
-  { value: 'speaking', label: 'Speaking', key: 's', description: 'Practice pronunciation' },
+  { value: 'guided', label: 'Guided', key: 'g', description: 'Follow a guided sequence' },
+  { value: 'visual', label: 'Visual', key: 'v', description: 'Preview each result as you go' },
+  { value: 'light', label: 'Light', key: 'l', description: 'Short, low-effort sessions' },
+  { value: 'strict', label: 'Strict', key: 's', description: 'No hints, strict ordering' },
 ]
 
 const MODES = [
@@ -157,7 +157,7 @@ function PracticeScreen() {
 function Shell() {
   const { currentScreen } = useNavigation()
   return (
-    <AppShell topBar={<TopBar appName="Practice Flow Demo" screenTitle={currentScreen.title} />}>
+    <AppShell topBar={<TopBar appName="Runeframe" screenTitle={currentScreen.title} />}>
       <ScreenOutlet />
     </AppShell>
   )

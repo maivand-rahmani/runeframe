@@ -37,8 +37,5 @@ jobs:
         run: npm run test:integration:smoke
         continue-on-error: true
 
-      - name: Build
-        run: npm run build
-
-      - name: Pack smoke test
-        run: npm pack --dry-run
+      - name: Packed consumer check (ESM-only, Node >= 22)
+        run: npm run pack:check

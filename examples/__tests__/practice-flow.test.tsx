@@ -23,7 +23,7 @@ describe('practice-flow integration', () => {
   it('navigates through multiple steps via keyboard and captures data', async () => {
     const { lastFrame, stdin } = renderApp()
 
-    // Step 1: Choose 'Grammar' track (press 'g' letter shortcut)
+    // Step 1: Choose 'Guided' track (press 'g' letter shortcut)
     await delay(100)
     stdin.write('g')
     await delay(150)

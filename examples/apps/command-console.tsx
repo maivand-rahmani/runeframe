@@ -17,7 +17,7 @@ import {
 const registry = new ScreenRegistry()
 registry.register({
   id: 'home',
-  title: 'Command Console Demo',
+  title: 'Command Console',
   sidebar: true,
   category: 'main',
   component: () => <HomeScreen />,
@@ -159,7 +159,7 @@ function Shell() {
   return (
     <AppShell
       topBar={
-        <TopBar appName="Console Demo" screenTitle={currentScreen.title} />
+        <TopBar appName="Runeframe" screenTitle={currentScreen.title} />
       }
     >
       <ScreenOutlet />

@@ -22,41 +22,41 @@ describe('TopBar', () => {
 
   it('renders app name', () => {
     const { lastFrame } = renderInTheme(
-      <TopBar appName="EnglishOS" columns={100} />,
+      <TopBar appName="Runeframe" columns={100} />,
     )
-    expect(lastFrame()).toContain('EnglishOS')
+    expect(lastFrame()).toContain('Runeframe')
   })
 
   it('renders screen title when provided', () => {
     const { lastFrame } = renderInTheme(
-      <TopBar appName="EnglishOS" screenTitle="Dashboard" columns={100} />,
+      <TopBar appName="Runeframe" screenTitle="Dashboard" columns={100} />,
     )
-    expect(lastFrame()).toContain('EnglishOS')
+    expect(lastFrame()).toContain('Runeframe')
     expect(lastFrame()).toContain('Dashboard')
   })
 
   it('renders without screen title', () => {
     const { lastFrame } = renderInTheme(
-      <TopBar appName="EnglishOS" columns={100} />,
+      <TopBar appName="Runeframe" columns={100} />,
     )
-    expect(lastFrame()).toContain('EnglishOS')
+    expect(lastFrame()).toContain('Runeframe')
     expect(lastFrame()).not.toContain('\u2014')
   })
 
   it('compact mode shows only app name', () => {
     const { lastFrame } = renderInTheme(
-      <TopBar appName="EnglishOS" screenTitle="Dashboard" columns={70} />,
+      <TopBar appName="Runeframe" screenTitle="Dashboard" columns={70} />,
     )
-    expect(lastFrame()).toContain('EnglishOS')
+    expect(lastFrame()).toContain('Runeframe')
     expect(lastFrame()).not.toContain('Dashboard')
   })
 
   it('full mode shows app name and screen title', () => {
     const { lastFrame } = renderInTheme(
-      <TopBar appName="EnglishOS" screenTitle="Vocabulary" columns={120} />,
+      <TopBar appName="Runeframe" screenTitle="Reports" columns={120} />,
     )
-    expect(lastFrame()).toContain('EnglishOS')
-    expect(lastFrame()).toContain('Vocabulary')
+    expect(lastFrame()).toContain('Runeframe')
+    expect(lastFrame()).toContain('Reports')
   })
 
   it('uses theme tokens for text colors', () => {
@@ -69,7 +69,7 @@ describe('TopBar', () => {
 
   it('renders date in the output', () => {
     const { lastFrame } = renderInTheme(
-      <TopBar appName="EnglishOS" columns={100} />,
+      <TopBar appName="Runeframe" columns={100} />,
     )
     expect(lastFrame()).toContain('2026')
   })

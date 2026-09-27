@@ -7,7 +7,7 @@ describe('quickstart smoke', () => {
   it('renders through full FrameworkProvider stack without errors', () => {
     const { lastFrame } = render(<App />)
     const frame = normalizeFrame(lastFrame())
-    expect(frame).toContain('Framework Demo')
+    expect(frame).toContain('Runeframe')
     expect(frame).toContain('Home')
   })
 

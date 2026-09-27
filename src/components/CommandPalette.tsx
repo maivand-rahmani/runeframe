@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ReactElement } from 'react'
 import { Box, Text } from 'ink'
-import { useInputInScope } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import type { ActionRegistry, ActionMatch } from '../commands/ActionRegistry.js'
 
@@ -36,40 +36,40 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
     onClose,
   }
 
-  useInputInScope(
-    (input, key) => {
+  useKeyHandler(
+    (event) => {
       const h = ref.current
 
-      if (key.escape) {
+      if (event.escape) {
         h.onClose()
         return true
       }
 
-      if (key.return && h.results[h.selectedIndex]) {
+      if (event.enter && h.results[h.selectedIndex]) {
         h.results[h.selectedIndex].action.handler()
         h.onClose()
         return true
       }
 
-      if (key.downArrow) {
+      if (event.down) {
         h.setSelectedIndex((prev: number) =>
           Math.min(prev + 1, h.results.length - 1),
         )
         return true
       }
 
-      if (key.upArrow) {
+      if (event.up) {
         h.setSelectedIndex((prev: number) => Math.max(prev - 1, 0))
         return true
       }
 
-      if (key.backspace) {
+      if (event.backspace) {
         h.setQuery((prev: string) => prev.slice(0, -1))
         return true
       }
 
-      if (input.length === 1 && input >= ' ' && input <= '~') {
-        h.setQuery((prev: string) => prev + input)
+      if (event.isPrintable) {
+        h.setQuery((prev: string) => prev + event.text)
         return true
       }
     },

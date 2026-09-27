@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
-import { useKeyHandler } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
 import { useRegisterActions } from '../commands/ScopedActionRegistryProvider.js'
 import { InputConsumptionResult } from '../types.js'

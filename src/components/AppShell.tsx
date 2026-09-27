@@ -1,8 +1,9 @@
-import { useState, useCallback, useRef, type ReactNode } from 'react'
+import { useState, useCallback, useId, useRef, type ReactNode } from 'react'
 import { Box, useWindowSize } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { LAYOUT } from '../constants.js'
-import { useKeyHandler } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
+import { useFocusZone } from '../interaction/FocusTreeProvider.js'
 import { InputConsumptionResult } from '../types.js'
 
 export interface AppShellProps {
@@ -42,6 +43,12 @@ export function AppShell({
   const { columns: detectedColumns } = useWindowSize()
   const columns = columnsOverride ?? detectedColumns ?? LAYOUT.medium
   const theme = useTheme()
+  const contentZoneId = useId()
+  const { ZoneProvider: ContentZoneProvider } = useFocusZone(contentZoneId, {
+    scope: 'navigation',
+    orientation: 'horizontal',
+    order: 1,
+  })
 
   const isNarrow = columns < LAYOUT.narrow
   const isWide = columns >= LAYOUT.medium
@@ -110,11 +117,13 @@ export function AppShell({
               ? { height: viewportHeight, overflow: 'hidden' as const }
               : {})}
           >
-            {isScrollable ? (
-              <Box marginTop={-scrollOffset}>{children}</Box>
-            ) : (
-              children
-            )}
+            <ContentZoneProvider>
+              {isScrollable ? (
+                <Box marginTop={-scrollOffset}>{children}</Box>
+              ) : (
+                children
+              )}
+            </ContentZoneProvider>
           </Box>
         </Box>
 
@@ -148,7 +157,7 @@ export function AppShell({
           </Box>
         )}
         <Box flexGrow={1} flexShrink={isWide ? 1 : 0}>
-          {children}
+          <ContentZoneProvider>{children}</ContentZoneProvider>
         </Box>
       </Box>
 

@@ -1,11 +1,15 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { Box, Text, useWindowSize } from 'ink'
 import { LAYOUT } from '../constants.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
-import { FocusScope } from '../interaction/FocusScope.js'
-import { useFocusable } from '../interaction/useFocusable.js'
-import { useFocusableRegion } from '../interaction/RegionProvider.js'
+import {
+  useFocusZone,
+  useFocusGroup,
+  useFocusable,
+} from '../interaction/FocusTreeProvider.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
+import { InputConsumptionResult } from '../types.js'
 import { useNavigation } from '../navigation/NavigationProvider.js'
 
 export interface SidebarItem {
@@ -32,12 +36,12 @@ function SidebarEntry({
   item,
   active,
   showDescription,
-  regionActive,
+  groupActive,
 }: {
   item: SidebarItem
   active: boolean
   showDescription: boolean
-  regionActive: boolean
+  groupActive: boolean
 }) {
   const theme = useTheme()
   const { focused, onActivate } = useFocusable({ id: item.id })
@@ -51,7 +55,7 @@ function SidebarEntry({
   }, [active])
 
   const marker = focused ? '›' : active ? '•' : ' '
-  const labelColor = regionActive
+  const labelColor = groupActive
     ? active
       ? theme.colors.focus.active
       : focused
@@ -63,7 +67,7 @@ function SidebarEntry({
 
   return (
     <Box flexDirection="column" marginTop={theme.spacing.xs}>
-      <Text color={labelColor} bold={active || (focused && regionActive)}>
+      <Text color={labelColor} bold={active || (focused && groupActive)}>
         {marker} {item.label}
       </Text>
       {showDescription && item.description != null && item.description.length > 0 && (
@@ -85,10 +89,46 @@ export function Sidebar({
   const columns = columnsOverride ?? detectedColumns ?? LAYOUT.medium
   const theme = useTheme()
   const { currentScreenId, push } = useNavigation()
-  const { isActive: regionActive } = useFocusableRegion('sidebar')
-  const showDescriptions = columns >= LAYOUT.medium
   const hasActiveItem = items.some((item) => item.id === currentScreenId)
+  const zoneId = useId()
+  const { ZoneProvider } = useFocusZone(zoneId, {
+    scope: 'navigation',
+    orientation: 'horizontal',
+    order: 0,
+  })
+  const { GroupProvider, focusedId, isActive: groupActive } = useFocusGroup(
+    'sidebar',
+    {
+      autoFocus: !hasActiveItem,
+      scope: 'navigation',
+    },
+  )
+  const showDescriptions = columns >= LAYOUT.medium
   const inputOrder = new Map(items.map((item, index) => [item.id, index]))
+
+  // Handler state is kept in refs so keyboard registration is stable.
+  const focusedIdRef = useRef(focusedId)
+  focusedIdRef.current = focusedId
+  const firstItemIdRef = useRef<string | null>(items[0]?.id ?? null)
+  firstItemIdRef.current = items[0]?.id ?? null
+  const currentScreenIdRef = useRef(currentScreenId)
+  currentScreenIdRef.current = currentScreenId
+  const pushRef = useRef(push)
+  pushRef.current = push
+
+  useKeyHandler(
+    (event) => {
+      if (!groupActive) return InputConsumptionResult.NotConsumed
+      if (!event.enter) return InputConsumptionResult.NotConsumed
+      const targetId = focusedIdRef.current ?? firstItemIdRef.current
+      if (!targetId) return InputConsumptionResult.NotConsumed
+      if (targetId !== currentScreenIdRef.current) {
+        pushRef.current(targetId)
+      }
+      return InputConsumptionResult.Consumed
+    },
+    'navigation',
+  )
 
   const allCategories = new Set<string>([
     ...(categoryOrder ?? []),
@@ -130,43 +170,36 @@ export function Sidebar({
   const visibleGroups = groupedItems.filter((group) => group.items.length > 0)
 
   return (
-    <FocusScope
-      scope="navigation"
-      autoFocus={regionActive && !hasActiveItem}
-      onActivate={(screenId) => {
-        if (screenId !== currentScreenId) {
-          push(screenId)
-        }
-      }}
-      regionId="sidebar"
-    >
-      <Box flexDirection="column">
-        {visibleGroups.map(({ category, items: categoryItems }, categoryIndex) => {
-          return (
-            <Box
-              key={category}
-              flexDirection="column"
-              marginBottom={
-                categoryIndex < visibleGroups.length - 1 ? theme.spacing.sm : 0
-              }
-            >
-              <Text bold color={theme.colors.text.muted}>
-                {sectionTitles?.[category] ?? category.toUpperCase()}
-              </Text>
-              {categoryItems.map((item) => (
-                <SidebarEntry
-                  key={item.id}
-                  item={item}
-                  active={item.id === currentScreenId}
-                  showDescription={showDescriptions}
-                  regionActive={regionActive}
-                />
-              ))}
-            </Box>
-          )
-        })}
-        {footer != null && <Box marginTop={theme.spacing.sm}>{footer}</Box>}
-      </Box>
-    </FocusScope>
+    <ZoneProvider>
+      <GroupProvider>
+        <Box flexDirection="column">
+          {visibleGroups.map(({ category, items: categoryItems }, categoryIndex) => {
+            return (
+              <Box
+                key={category}
+                flexDirection="column"
+                marginBottom={
+                  categoryIndex < visibleGroups.length - 1 ? theme.spacing.sm : 0
+                }
+              >
+                <Text bold color={theme.colors.text.muted}>
+                  {sectionTitles?.[category] ?? category.toUpperCase()}
+                </Text>
+                {categoryItems.map((item) => (
+                  <SidebarEntry
+                    key={item.id}
+                    item={item}
+                    active={item.id === currentScreenId}
+                    showDescription={showDescriptions}
+                    groupActive={groupActive}
+                  />
+                ))}
+              </Box>
+            )
+          })}
+          {footer != null && <Box marginTop={theme.spacing.sm}>{footer}</Box>}
+        </Box>
+      </GroupProvider>
+    </ZoneProvider>
   )
 }

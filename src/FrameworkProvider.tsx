@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import { ThemeProvider } from './design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from './interaction/KeyboardScopeProvider.js'
-import { RegionProvider } from './interaction/RegionProvider.js'
-import type { FocusScope } from './types.js'
+import { FocusTreeProvider } from './interaction/FocusTreeProvider.js'
+import { ScopedActionRegistryProvider } from './commands/ScopedActionRegistryProvider.js'
 import {
   NavigationProvider,
   type NavigationProviderProps,
@@ -14,50 +14,43 @@ export interface FrameworkProviderProps
   extends Pick<NavigationProviderProps, 'registry' | 'defaultScreen'> {
   children: ReactNode
   themeMode?: 'dark' | 'light'
-  defaultScope?: FocusScope
-  defaultRegion?: string
-  withToastProvider?: boolean
-  withModalProvider?: boolean
-  withRegionProvider?: boolean
   onModalClose?: () => void
 }
 
+/**
+ * Complete default composition for a Runeframe application.
+ *
+ * Provider order (outermost → innermost):
+ * Theme → keyboard dispatch → focus tree → scoped actions → navigation →
+ * toast host → modal host → children.
+ *
+ * Every capability is always enabled: focus tree, scoped action registry,
+ * navigation, modals and toasts. There are no opt-in composition flags.
+ */
 export function FrameworkProvider({
   children,
   registry,
   defaultScreen,
   themeMode = 'dark',
-  defaultScope = 'navigation',
-  defaultRegion = 'content',
-  withToastProvider = true,
-  withModalProvider = true,
-  withRegionProvider = false,
   onModalClose,
 }: FrameworkProviderProps) {
-  let body: ReactNode = children
-
-  if (withModalProvider) {
-    body = <ModalProvider onClose={onModalClose}>{body}</ModalProvider>
-  }
-
-  if (withToastProvider) {
-    body = <ToastProvider>{body}</ToastProvider>
-  }
-
   return (
     <ThemeProvider mode={themeMode}>
-      <KeyboardScopeProvider defaultScope={defaultScope}>
-        {withRegionProvider ? (
-          <RegionProvider defaultRegion={defaultRegion}>
-            <NavigationProvider registry={registry} defaultScreen={defaultScreen}>
-              {body}
+      <KeyboardScopeProvider>
+        <FocusTreeProvider>
+          <ScopedActionRegistryProvider>
+            <NavigationProvider
+              registry={registry}
+              defaultScreen={defaultScreen}
+            >
+              <ToastProvider>
+                <ModalProvider onClose={onModalClose}>
+                  {children}
+                </ModalProvider>
+              </ToastProvider>
             </NavigationProvider>
-          </RegionProvider>
-        ) : (
-          <NavigationProvider registry={registry} defaultScreen={defaultScreen}>
-            {body}
-          </NavigationProvider>
-        )}
+          </ScopedActionRegistryProvider>
+        </FocusTreeProvider>
       </KeyboardScopeProvider>
     </ThemeProvider>
   )

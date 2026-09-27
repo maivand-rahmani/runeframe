@@ -1,9 +1,13 @@
 import { useRef, useEffect, type ReactElement } from 'react'
 import { Box, Text } from 'ink'
-import { FocusScope, useFocusScope } from '../interaction/FocusScope.js'
-import { useFocusable } from '../interaction/useFocusable.js'
+import {
+  useFocusGroup,
+  useFocusable,
+} from '../interaction/FocusTreeProvider.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { LAYOUT } from '../constants.js'
+import { InputConsumptionResult } from '../types.js'
 
 // ── Data Types ──
 
@@ -41,14 +45,53 @@ export function List<T extends ListItem>({
       ? items.slice(0, safeMaxVisible)
       : items
 
+  const { GroupProvider, focusedId } = useFocusGroup('list', {
+    autoFocus: true,
+    scope: 'list',
+  })
+
+  // Handler state is kept in refs so keyboard registration is stable.
+  const focusedIdRef = useRef(focusedId)
+  focusedIdRef.current = focusedId
+  const firstItemIdRef = useRef<string | null>(items[0]?.id ?? null)
+  firstItemIdRef.current = items[0]?.id ?? null
+  const onActivateRef = useRef(onActivate)
+  onActivateRef.current = onActivate
+  const onSelectRef = useRef(onSelect)
+  onSelectRef.current = onSelect
+  const prevFocusedIdRef = useRef<string | null>(null)
+
+  useKeyHandler(
+    (event) => {
+      if (!event.enter) return InputConsumptionResult.NotConsumed
+      if (!onActivateRef.current) return InputConsumptionResult.NotConsumed
+      const targetId = focusedIdRef.current ?? firstItemIdRef.current
+      if (!targetId) return InputConsumptionResult.NotConsumed
+      onActivateRef.current(targetId)
+      return InputConsumptionResult.Consumed
+    },
+    'list',
+  )
+
+  // `onSelect` observes roving focus once it leaves the initial item.
+  useEffect(() => {
+    if (
+      prevFocusedIdRef.current !== null &&
+      focusedId !== null &&
+      focusedId !== prevFocusedIdRef.current
+    ) {
+      onSelectRef.current?.(focusedId)
+    }
+    prevFocusedIdRef.current = focusedId
+  }, [focusedId])
+
   if (items.length === 0) {
     return <Text dimColor>No items</Text>
   }
 
   return (
-    <FocusScope scope="list" autoFocus onActivate={onActivate}>
+    <GroupProvider>
       <Box flexDirection="column">
-        <SelectObserver onSelect={onSelect} />
         {displayItems.map((item) => (
           <ListItemRow
             key={item.id}
@@ -65,34 +108,11 @@ export function List<T extends ListItem>({
           />
         ))}
       </Box>
-    </FocusScope>
+    </GroupProvider>
   )
 }
 
 // ── Internal Helpers ──
-
-function SelectObserver({
-  onSelect,
-}: {
-  onSelect?: (id: string) => void
-}) {
-  const { focusedId } = useFocusScope()
-  const prevFocusedId = useRef<string | null>(null)
-
-  useEffect(() => {
-    if (
-      prevFocusedId.current !== null &&
-      focusedId !== null &&
-      focusedId !== prevFocusedId.current &&
-      onSelect
-    ) {
-      onSelect(focusedId)
-    }
-    prevFocusedId.current = focusedId
-  }, [focusedId, onSelect])
-
-  return null
-}
 
 interface ListItemRowProps {
   item: ListItem

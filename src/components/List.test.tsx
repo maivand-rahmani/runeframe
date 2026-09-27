@@ -3,6 +3,7 @@ import { render } from 'ink-testing-library'
 import { Text } from 'ink'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
+import { FocusTreeProvider } from '../interaction/FocusTreeProvider.js'
 import { List, type ListItem } from './List.js'
 import type { ReactElement } from 'react'
 
@@ -12,6 +13,21 @@ function renderInTheme(ui: ReactElement) {
 
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+async function waitForFrame(
+  getFrame: () => string | undefined,
+  expected: string,
+  timeoutMs = 1500,
+): Promise<string> {
+  const start = Date.now()
+  let frame = getFrame() ?? ''
+  while (Date.now() - start < timeoutMs) {
+    if (frame.includes(expected)) return frame
+    await delay(20)
+    frame = getFrame() ?? ''
+  }
+  return frame
 }
 
 const sampleItems: ListItem[] = [
@@ -82,6 +98,35 @@ describe('List', () => {
     await delay()
     stdin.write('\u001b[B')
     await delay()
+    stdin.write('\r')
+    await delay()
+    expect(activated).toContain('b')
+  })
+
+  it('navigates under FocusTreeProvider without legacy focus providers', async () => {
+    const activated: string[] = []
+    const { lastFrame, stdin } = renderInTheme(
+      <KeyboardScopeProvider defaultScope="navigation">
+        <FocusTreeProvider>
+          <List
+            items={sampleItems}
+            onActivate={(id) => activated.push(id)}
+            renderItem={(item, { focused }) => (
+              <Text>
+                {item.label}
+                {focused ? '*' : ''}
+              </Text>
+            )}
+          />
+        </FocusTreeProvider>
+      </KeyboardScopeProvider>,
+    )
+
+    await waitForFrame(lastFrame, 'Item Alpha*')
+
+    stdin.write('\u001b[B')
+    await waitForFrame(lastFrame, 'Item Beta*')
+
     stdin.write('\r')
     await delay()
     expect(activated).toContain('b')

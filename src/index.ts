@@ -1,6 +1,20 @@
 // @maivandrahmani/englishos-tui-framework — stable barrel exports
 export type * from './types.js'
+export { InputConsumptionResult } from './types.js'
 export * from './constants.js'
+export {
+  normalizeKey,
+  KEY_ENTER,
+  KEY_ESCAPE,
+  KEY_TAB,
+  KEY_BACKSPACE,
+  KEY_DELETE,
+  KEY_UP,
+  KEY_DOWN,
+  KEY_LEFT,
+  KEY_RIGHT,
+  KEY_SPACE,
+} from './interaction/KeyEventNormalizer.js'
 export * from './design-system/tokens.js'
 export { ThemeProvider, useTheme } from './design-system/ThemeProvider.js'
 export { FrameworkProvider } from './FrameworkProvider.js'
@@ -66,23 +80,17 @@ export type {
 } from './components/Sidebar.js'
 export { KeyboardScopeProvider, useKeyboardScope, useShellSuspension } from './interaction/KeyboardScopeProvider.js'
 export type { ScopeStackEntry } from './interaction/KeyboardScopeProvider.js'
-export { useInputInScope } from './interaction/useInputInScope.js'
-export { useScopedInputInScope } from './interaction/useInputInScope.js'
+export { useKeyHandler, useKeyBinding } from './interaction/useKeyHandler.js'
 export type {
-  LegacyInputHandler,
-  ScopedInputHandler,
-  UseInputInScopeOptions,
-} from './interaction/useInputInScope.js'
-export { FocusScope, useFocusScope } from './interaction/FocusScope.js'
-export type { FocusScopeProps, FocusScopeContextValue } from './interaction/FocusScope.js'
-export { useFocusable } from './interaction/useFocusable.js'
-export type { UseFocusableOptions, UseFocusableResult } from './interaction/useFocusable.js'
+  KeyHandler,
+  KeyBindingOptions,
+  UseKeyHandlerOptions,
+} from './interaction/useKeyHandler.js'
 export {
   FocusTreeProvider,
-  FocusZoneContext,
   useFocusZone,
   useFocusGroup,
-  useFocusableV2,
+  useFocusable,
 } from './interaction/FocusTreeProvider.js'
 export type {
   FocusZoneContextValue,
@@ -91,14 +99,10 @@ export type {
   UseFocusZoneResult,
   UseFocusGroupOptions,
   UseFocusGroupResult,
-  UseFocusableV2Options,
-  UseFocusableV2Result,
+  UseFocusableOptions,
+  UseFocusableResult,
   FocusTreeProviderProps,
 } from './interaction/FocusTreeProvider.js'
-export { RegionProvider, useRegionContext, useFocusableRegion } from './interaction/RegionProvider.js'
-export type { RegionFocusContextValue, UseFocusableRegionResult, RegionProviderProps } from './interaction/RegionProvider.js'
-export { useInputInRegion, useScopedInputInRegion } from './interaction/useInputInRegion.js'
-export type { LegacyInputHandler as LegacyRegionInputHandler, ScopedInputHandler as ScopedRegionInputHandler } from './interaction/useInputInRegion.js'
 export { ActionRegistry } from './commands/ActionRegistry.js'
 export type { Action, ActionMatch } from './commands/ActionRegistry.js'
 export {

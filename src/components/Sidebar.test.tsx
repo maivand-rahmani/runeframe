@@ -4,6 +4,7 @@ import { Box, Text } from 'ink'
 import type { ReactElement } from 'react'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
+import { FocusTreeProvider, useFocusable, useFocusGroup } from '../interaction/FocusTreeProvider.js'
 import { NavigationProvider, useNavigation } from '../navigation/NavigationProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
 import { AppShell } from './AppShell.js'
@@ -203,6 +204,53 @@ describe('Sidebar', () => {
     const frame = lastFrame()
     expect(frame).toContain('Current: plan')
     expect(frame).toContain('› Plan')
+  })
+
+  it('moves between the sidebar and content with Tab and horizontal arrows', async () => {
+    function ContentItem() {
+      const { focused } = useFocusable({ id: 'content-focus' })
+      return <Text>Content item focused={String(focused)}</Text>
+    }
+
+    function FocusableContent() {
+      const group = useFocusGroup('content-group', { scope: 'navigation' })
+      return (
+        <group.GroupProvider>
+          <Text>Content group active={String(group.isActive)}</Text>
+          <ContentItem />
+        </group.GroupProvider>
+      )
+    }
+
+    const { lastFrame, stdin } = renderInTheme(
+      <KeyboardScopeProvider>
+        <FocusTreeProvider>
+          <NavigationProvider registry={registry} defaultScreen="dashboard">
+            <AppShell
+              columns={120}
+              sidebar={<Sidebar items={sidebarItems} columns={120} />}
+            >
+              <FocusableContent />
+            </AppShell>
+          </NavigationProvider>
+        </FocusTreeProvider>
+      </KeyboardScopeProvider>,
+    )
+
+    await delay()
+    expect(lastFrame()).toContain('Content group active=false')
+
+    stdin.write('\u001b[C')
+    await delay()
+    expect(lastFrame()).toContain('Content group active=true')
+
+    stdin.write('\u001b[D')
+    await delay()
+    expect(lastFrame()).toContain('Content group active=false')
+
+    stdin.write('\t')
+    await delay()
+    expect(lastFrame()).toContain('Content group active=true')
   })
 
   it('collapses descriptions below medium width while keeping labels visible', async () => {

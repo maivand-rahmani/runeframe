@@ -2,7 +2,7 @@ import { useRef } from 'react'
 import { Text } from 'ink'
 import { ModalDialog } from './ModalDialog.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
-import { useKeyHandler } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { InputConsumptionResult } from '../types.js'
 import type { Action } from '../commands/ActionRegistry.js'
 

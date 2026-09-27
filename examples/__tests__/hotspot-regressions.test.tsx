@@ -12,7 +12,6 @@ import { ScreenRegistry } from '../../src/screens/registry.js'
 import { ModalProvider } from '../../src/components/ModalProvider.js'
 import { ToastProvider } from '../../src/components/ToastProvider.js'
 import { ThemeProvider } from '../../src/design-system/ThemeProvider.js'
-import { RegionProvider } from '../../src/interaction/RegionProvider.js'
 import { ScopedActionRegistryProvider, useRegisterActions } from '../../src/commands/ScopedActionRegistryProvider.js'
 import { HotkeyHintBar } from '../../src/components/HotkeyHintBar.js'
 
@@ -55,20 +54,6 @@ describe('Modal + Toast coexistence', () => {
           React.createElement(ModalProvider, null,
             React.createElement(Text, null, 'Modal+Toast content'),
           ),
-        ),
-      ),
-    )
-    expect(normalizeFrame(lastFrame())).toBeTruthy()
-  })
-})
-
-// ── RegionProvider + Focus routing ──
-describe('RegionProvider + Focus', () => {
-  it('renders RegionProvider with regions without crashing', () => {
-    const { lastFrame } = render(
-      React.createElement(KeyboardScopeProvider, { defaultScope: 'navigation' },
-        React.createElement(RegionProvider, { defaultRegion: 'content' },
-          React.createElement(Text, null, 'Region content'),
         ),
       ),
     )

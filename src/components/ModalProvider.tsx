@@ -5,7 +5,7 @@ import {
   useModalState,
 } from '../navigation/NavigationProvider.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
-import { useScopedInputInScope } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useKeyboardScope } from '../interaction/KeyboardScopeProvider.js'
 
 export interface ModalProviderProps {
@@ -33,17 +33,14 @@ export function ModalProvider({ children, onClose }: ModalProviderProps) {
     }
   }, [isModalOpen, isScopeActive, popScope, pushScope])
 
-  useScopedInputInScope(
+  useKeyHandler(
     (event) => {
-      const { key } = event
-      if (key.escape) {
-        if (onCloseRef.current) {
-          onCloseRef.current()
-        }
-        popModal()
-        event.stopPropagation()
-        return true
+      if (!event.escape) return
+      if (onCloseRef.current) {
+        onCloseRef.current()
       }
+      popModal()
+      return true
     },
     'modal',
     { deps: [popModal], priority: 100 },

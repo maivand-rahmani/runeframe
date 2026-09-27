@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
-import { useScopedInputInScope } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { ConfirmModal } from './ConfirmModal.js'
 
 export interface ConfirmDialogProps {
@@ -28,18 +28,15 @@ export function ConfirmDialog({
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
-  useScopedInputInScope(
+  useKeyHandler(
     (event) => {
-      const { key } = event
-      if (key.return) {
+      if (event.enter) {
         onConfirmRef.current()
         onCloseRef.current()
-        event.stopPropagation()
         return true
       }
-      if (key.escape) {
+      if (event.escape) {
         onCloseRef.current()
-        event.stopPropagation()
         return true
       }
     },

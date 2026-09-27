@@ -1,7 +1,7 @@
 import { Text } from 'ink'
 import { useRef, type ReactElement } from 'react'
 import { useTheme } from '../design-system/ThemeProvider.js'
-import { useInputInScope } from '../interaction/useInputInScope.js'
+import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import type { FocusScope } from '../types.js'
 
 export interface Tab {
@@ -44,21 +44,21 @@ export function Tabs({
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
 
-  useInputInScope(
-    (_input, key) => {
+  useKeyHandler(
+    (event) => {
       const currentTabs = tabsRef.current
       const currentId = activeTabIdRef.current
       const currentOnChange = onChangeRef.current
 
       if (currentTabs.length === 0) return
 
-      if (key.leftArrow) {
+      if (event.left) {
         const currentIndex = currentTabs.findIndex((t) => t.id === currentId)
         if (currentIndex === -1) return
         const prevIndex = (currentIndex - 1 + currentTabs.length) % currentTabs.length
         currentOnChange(currentTabs[prevIndex].id)
         return true
-      } else if (key.rightArrow) {
+      } else if (event.right) {
         const currentIndex = currentTabs.findIndex((t) => t.id === currentId)
         if (currentIndex === -1) return
         const nextIndex = (currentIndex + 1) % currentTabs.length

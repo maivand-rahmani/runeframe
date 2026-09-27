@@ -4,14 +4,14 @@ import {
   FrameworkProvider,
   AppShell,
   TopBar,
-  ScreenRenderer,
   ScreenRegistry,
-  useNavigationState,
+  useNavigation,
   StepFlow,
   ChoicePrompt,
   NumberInput,
   TextInput,
   HotkeyHintBar,
+  ScreenOutlet,
 } from '../../src/index.js'
 
 // ── Practice track options ──
@@ -155,10 +155,10 @@ function PracticeScreen() {
 // ── Shell ──
 
 function Shell() {
-  const { currentScreen } = useNavigationState()
+  const { currentScreen } = useNavigation()
   return (
     <AppShell topBar={<TopBar appName="Practice Flow Demo" screenTitle={currentScreen.title} />}>
-      <ScreenRenderer />
+      <ScreenOutlet />
     </AppShell>
   )
 }

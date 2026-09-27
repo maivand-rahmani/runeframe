@@ -1,13 +1,11 @@
 import {
   createContext,
   useContext,
-  useState,
   useCallback,
-  useRef,
   useMemo,
+  useReducer,
   type ReactNode,
 } from 'react'
-import { ScreenProvider, useScreen } from '../screens/ScreenProvider.js'
 import type { ScreenDefinition } from '../screens/screen.js'
 import type { ScreenRegistry } from '../screens/registry.js'
 
@@ -16,12 +14,14 @@ export interface NavigationEntry {
   params: Record<string, unknown>
 }
 
-export interface ModalEntry<TProps extends Record<string, unknown> = Record<string, unknown>> {
+export interface ModalEntry<
+  TProps extends Record<string, unknown> = Record<string, unknown>,
+> {
   screenId: string
   props: TProps
 }
 
-export interface NavigationStateValue {
+interface NavigationStateValue {
   currentScreenId: string
   currentScreen: ScreenDefinition
   params: Record<string, unknown>
@@ -30,21 +30,21 @@ export interface NavigationStateValue {
   breadcrumbs: NavigationEntry[]
 }
 
-export interface NavigationActionsValue {
+interface NavigationActionsValue {
   push: (screenId: string, params?: Record<string, unknown>) => void
   pop: () => void
   popToRoot: () => void
   replace: (screenId: string, params?: Record<string, unknown>) => void
 }
 
-export interface ModalStateValue {
+interface ModalStateValue {
   modalStack: ModalEntry[]
   isModalOpen: boolean
   currentModal: ScreenDefinition | null
   currentModalProps: Record<string, unknown>
 }
 
-export interface ModalActionsValue {
+interface ModalActionsValue {
   pushModal: <TProps extends Record<string, unknown>>(
     screenId: string,
     props?: TProps,
@@ -71,48 +71,123 @@ export interface NavigationProviderProps {
   children: ReactNode
 }
 
-function NavigationProviderInner({ children }: { children: ReactNode }) {
-  const { currentScreenId, navigate, screenParams, registry, currentScreen } =
-    useScreen()
+interface RouteState {
+  screenId: string
+  params: Record<string, unknown>
+}
 
-  const [history, setHistory] = useState<NavigationEntry[]>([])
-  const [modalStack, setModalStack] = useState<ModalEntry[]>([])
+interface NavigationProviderState {
+  route: RouteState
+  history: NavigationEntry[]
+  modalStack: ModalEntry[]
+}
 
-  const historyRef = useRef(history)
-  historyRef.current = history
+type NavigationProviderAction =
+  | { type: 'push'; entry: RouteState }
+  | { type: 'pop' }
+  | { type: 'popToRoot' }
+  | { type: 'replace'; entry: RouteState }
+  | { type: 'pushModal'; entry: ModalEntry }
+  | { type: 'popModal' }
+  | { type: 'popAllModals' }
+
+function reducer(
+  state: NavigationProviderState,
+  action: NavigationProviderAction,
+): NavigationProviderState {
+  switch (action.type) {
+    case 'push':
+      return {
+        ...state,
+        history: [
+          ...state.history,
+          { screenId: state.route.screenId, params: state.route.params },
+        ],
+        route: action.entry,
+      }
+    case 'pop': {
+      if (state.history.length === 0) return state
+      const previous = state.history[state.history.length - 1]
+      return {
+        ...state,
+        route: { screenId: previous.screenId, params: previous.params },
+        history: state.history.slice(0, -1),
+      }
+    }
+    case 'popToRoot': {
+      if (state.history.length === 0) return state
+      const root = state.history[0]
+      return {
+        ...state,
+        route: { screenId: root.screenId, params: root.params },
+        history: [],
+      }
+    }
+    case 'replace':
+      return { ...state, route: action.entry }
+    case 'pushModal':
+      return { ...state, modalStack: [...state.modalStack, action.entry] }
+    case 'popModal': {
+      if (state.modalStack.length === 0) return state
+      return { ...state, modalStack: state.modalStack.slice(0, -1) }
+    }
+    case 'popAllModals':
+      return state.modalStack.length === 0
+        ? state
+        : { ...state, modalStack: [] }
+  }
+}
+
+function createInitialState(
+  registry: ScreenRegistry,
+  defaultScreen: string,
+): NavigationProviderState {
+  registry.get(defaultScreen)
+  return {
+    route: { screenId: defaultScreen, params: {} },
+    history: [],
+    modalStack: [],
+  }
+}
+
+/**
+ * Sole owner of route history and the modal stack.
+ *
+ * `registry` remains the registration mechanism for screen definitions;
+ * `<ScreenOutlet>` renders the current route. Consumers read the combined
+ * state/actions contract through `useNavigation()`.
+ */
+export function NavigationProvider({
+  registry,
+  defaultScreen,
+  children,
+}: NavigationProviderProps) {
+  const [state, dispatch] = useReducer(reducer, undefined, () =>
+    createInitialState(registry, defaultScreen),
+  )
 
   const push = useCallback(
     (screenId: string, params?: Record<string, unknown>) => {
-      setHistory((prev) => [
-        ...prev,
-        { screenId: currentScreenId, params: screenParams },
-      ])
-      navigate(screenId, params)
+      registry.get(screenId)
+      dispatch({ type: 'push', entry: { screenId, params: params ?? {} } })
     },
-    [currentScreenId, navigate, screenParams],
+    [registry],
   )
 
   const pop = useCallback(() => {
-    const snapshot = historyRef.current
-    if (snapshot.length === 0) return
-    const previous = snapshot[snapshot.length - 1]
-    setHistory(snapshot.slice(0, -1))
-    navigate(previous.screenId, previous.params)
-  }, [navigate])
+    dispatch({ type: 'pop' })
+  }, [])
 
   const popToRoot = useCallback(() => {
-    const snapshot = historyRef.current
-    if (snapshot.length === 0) return
-    const root = snapshot[0]
-    setHistory([])
-    navigate(root.screenId, root.params)
-  }, [navigate])
+    dispatch({ type: 'popToRoot' })
+  }, [])
 
   const replace = useCallback(
     (screenId: string, params?: Record<string, unknown>) => {
-      navigate(screenId, params)
+      registry.get(screenId)
+      dispatch({ type: 'replace', entry: { screenId, params: params ?? {} } })
     },
-    [navigate],
+    [registry],
   )
 
   const pushModal = useCallback(
@@ -121,74 +196,66 @@ function NavigationProviderInner({ children }: { children: ReactNode }) {
       props?: TProps,
     ) => {
       registry.get(screenId)
-      setModalStack((prev) => [
-        ...prev,
-        {
-          screenId,
-          props: (props ?? {}) as TProps,
-        },
-      ])
+      dispatch({
+        type: 'pushModal',
+        entry: { screenId, props: (props ?? {}) as TProps },
+      })
     },
     [registry],
   )
 
   const popModal = useCallback(() => {
-    setModalStack((prev) => prev.slice(0, -1))
+    dispatch({ type: 'popModal' })
   }, [])
 
   const popAllModals = useCallback(() => {
-    setModalStack([])
+    dispatch({ type: 'popAllModals' })
   }, [])
 
-  const canGoBack = history.length > 0
-  const breadcrumbs: NavigationEntry[] = [
-    ...history,
-    { screenId: currentScreenId, params: screenParams },
-  ]
+  const currentScreen = registry.get(state.route.screenId)
+  const canGoBack = state.history.length > 0
+  const breadcrumbs: NavigationEntry[] = useMemo(
+    () => [
+      ...state.history,
+      { screenId: state.route.screenId, params: state.route.params },
+    ],
+    [state.history, state.route],
+  )
 
-  const currentModalEntry = modalStack[modalStack.length - 1]
+  const currentModalEntry = state.modalStack[state.modalStack.length - 1]
   const currentModal = currentModalEntry
     ? registry.get(currentModalEntry.screenId)
     : null
 
   const navigationState = useMemo<NavigationStateValue>(
     () => ({
-      currentScreenId,
+      currentScreenId: state.route.screenId,
       currentScreen,
-      params: screenParams,
+      params: state.route.params,
       registry,
       canGoBack,
       breadcrumbs,
     }),
-    [breadcrumbs, canGoBack, currentScreen, currentScreenId, registry, screenParams],
+    [breadcrumbs, canGoBack, currentScreen, registry, state.route],
   )
 
   const navigationActions = useMemo<NavigationActionsValue>(
-    () => ({
-      push,
-      pop,
-      popToRoot,
-      replace,
-    }),
+    () => ({ push, pop, popToRoot, replace }),
     [pop, popToRoot, push, replace],
   )
 
   const modalState = useMemo<ModalStateValue>(
     () => ({
-      modalStack,
-      isModalOpen: modalStack.length > 0,
+      modalStack: state.modalStack,
+      isModalOpen: state.modalStack.length > 0,
       currentModal,
       currentModalProps: currentModalEntry?.props ?? {},
     }),
-    [currentModal, currentModalEntry?.props, modalStack],
+    [currentModal, currentModalEntry, state.modalStack],
   )
 
   const modalActions = useMemo<ModalActionsValue>(
-    () => ({
-      pushModal,
-      popModal,
-      popAllModals,
-    }),
+    () => ({ pushModal, popModal, popAllModals }),
     [popAllModals, popModal, pushModal],
   )
 
@@ -205,18 +272,6 @@ function NavigationProviderInner({ children }: { children: ReactNode }) {
   )
 }
 
-export function NavigationProvider({
-  registry,
-  defaultScreen,
-  children,
-}: NavigationProviderProps) {
-  return (
-    <ScreenProvider registry={registry} defaultScreen={defaultScreen}>
-      <NavigationProviderInner>{children}</NavigationProviderInner>
-    </ScreenProvider>
-  )
-}
-
 function useRequiredContext<T>(context: React.Context<T | null>, name: string): T {
   const value = useContext(context)
   if (!value) {
@@ -225,27 +280,21 @@ function useRequiredContext<T>(context: React.Context<T | null>, name: string): 
   return value
 }
 
-export function useNavigationState(): NavigationStateValue {
-  return useRequiredContext(NavigationStateContext, 'useNavigationState()')
-}
-
-export function useNavigationActions(): NavigationActionsValue {
-  return useRequiredContext(NavigationActionsContext, 'useNavigationActions()')
-}
-
-export function useModalState(): ModalStateValue {
-  return useRequiredContext(ModalStateContext, 'useModalState()')
-}
-
-export function useModalActions(): ModalActionsValue {
-  return useRequiredContext(ModalActionsContext, 'useModalActions()')
-}
-
+/**
+ * Canonical combined navigation contract: route state, route actions,
+ * modal state and modal actions in a single hook.
+ */
 export function useNavigation(): NavigationContextValue {
-  return {
-    ...useNavigationState(),
-    ...useNavigationActions(),
-    ...useModalState(),
-    ...useModalActions(),
-  }
+  const state = useRequiredContext(NavigationStateContext, 'useNavigation()')
+  const actions = useRequiredContext(NavigationActionsContext, 'useNavigation()')
+  const modalState = useRequiredContext(ModalStateContext, 'useNavigation()')
+  const modalActions = useRequiredContext(
+    ModalActionsContext,
+    'useNavigation()',
+  )
+
+  return useMemo(
+    () => ({ ...state, ...actions, ...modalState, ...modalActions }),
+    [state, actions, modalState, modalActions],
+  )
 }

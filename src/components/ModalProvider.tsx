@@ -1,9 +1,6 @@
 import { useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { Box, Text } from 'ink'
-import {
-  useModalActions,
-  useModalState,
-} from '../navigation/NavigationProvider.js'
+import { useNavigation } from '../navigation/NavigationProvider.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useKeyboardScope } from '../interaction/KeyboardScopeProvider.js'
@@ -14,8 +11,13 @@ export interface ModalProviderProps {
 }
 
 export function ModalProvider({ children, onClose }: ModalProviderProps) {
-  const { isModalOpen, currentModal, currentModalProps, modalStack } = useModalState()
-  const { popModal } = useModalActions()
+  const {
+    isModalOpen,
+    currentModal,
+    currentModalProps,
+    modalStack,
+    popModal,
+  } = useNavigation()
   const { pushScope, popScope, isScopeActive } = useKeyboardScope()
   const { colors } = useTheme()
   const onCloseRef = useRef(onClose)
@@ -82,8 +84,7 @@ export function ModalProvider({ children, onClose }: ModalProviderProps) {
 }
 
 export function useModal() {
-  const { pushModal, popModal } = useModalActions()
-  const { isModalOpen, currentModal } = useModalState()
+  const { pushModal, popModal, isModalOpen, currentModal } = useNavigation()
 
   const openModal = useCallback(
     (screenId: string, props?: Record<string, unknown>) => {

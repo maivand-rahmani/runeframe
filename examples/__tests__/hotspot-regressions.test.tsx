@@ -50,14 +50,19 @@ describe('Modal + Toast coexistence', () => {
   it('renders ModalProvider inside ToastProvider without crashing', () => {
     const { lastFrame } = render(
       React.createElement(ThemeProvider, null,
-        React.createElement(ToastProvider, null,
-          React.createElement(ModalProvider, null,
-            React.createElement(Text, null, 'Modal+Toast content'),
+        React.createElement(KeyboardScopeProvider, null,
+          React.createElement(NavigationProvider, { registry, defaultScreen: 'home' },
+            React.createElement(ToastProvider, null,
+              React.createElement(ModalProvider, null,
+                React.createElement(Text, null, 'Modal+Toast content'),
+              ),
+            ),
           ),
         ),
       ),
     )
-    expect(normalizeFrame(lastFrame())).toBeTruthy()
+    const frame = normalizeFrame(lastFrame())
+    expect(frame).toContain('Modal+Toast content')
   })
 })
 

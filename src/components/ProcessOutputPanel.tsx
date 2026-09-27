@@ -1,52 +1,67 @@
 import { Box, Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
-import type { OutputLine, SessionStatus } from '../commands/useCommandSession.js'
+import type {
+  SessionEvent,
+  SessionStatus,
+} from '../commands/AsyncSessionRunner.js'
 
 export interface ProcessOutputPanelProps {
-  /** Accumulated output lines from the process. */
-  output: OutputLine[]
-  /** Lifecycle status of the process. */
+  /** Canonical session event stream (stdout/stderr/status/error/exit). */
+  events: readonly SessionEvent[]
+  /** Lifecycle status of the session. */
   status: SessionStatus
-  /** The command string that was used to spawn the process. */
-  activeCommand: string | null
-  /** Exit code (null if process hasn't exited yet). */
-  exitCode: number | null
+  /** The command that is running, or the last command that ran. */
+  activeCommand?: string | null
   /** Maximum number of visible output lines. Older lines are dropped. */
   maxVisibleLines?: number
-  /** Maximum height of the output panel (in terminal rows). */
-  maxHeight?: number
 }
 
 const STATUS_COLORS: Record<SessionStatus, string> = {
   idle: 'gray',
+  starting: 'yellow',
   running: 'green',
-  exited: 'yellow',
-} as const
+  complete: 'cyan',
+  error: 'red',
+}
 
 const STATUS_LABELS: Record<SessionStatus, string> = {
   idle: 'Idle',
+  starting: 'Starting...',
   running: 'Running...',
-  exited: 'Exited',
-} as const
+  complete: 'Complete',
+  error: 'Error',
+}
 
 /**
- * Presentational component that renders the output of a running process.
+ * Presentational component that renders the output of a session.
  * Shows stdout/stderr lines with stream-aware coloring, the active command,
- * and a status indicator bar.
+ * and a status bar. Reads the canonical `SessionEvent`/`SessionStatus`
+ * contract only.
  */
 export function ProcessOutputPanel({
-  output,
+  events,
   status,
   activeCommand,
-  exitCode,
   maxVisibleLines = 500,
-  maxHeight,
 }: ProcessOutputPanelProps) {
   const { colors } = useTheme()
+
+  const output = events.filter(
+    (event) => event.type === 'stdout' || event.type === 'stderr',
+  )
   const visible =
     maxVisibleLines > 0 && output.length > maxVisibleLines
       ? output.slice(-maxVisibleLines)
       : output
+
+  let exitCode: number | null = null
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]
+    if (event?.type === 'exit') {
+      exitCode = event.exitCode ?? null
+      break
+    }
+  }
 
   const statusColor = STATUS_COLORS[status]
   const statusLabel = STATUS_LABELS[status]
@@ -80,15 +95,15 @@ export function ProcessOutputPanel({
           {visible.map((line, i) => (
             <Text
               key={i}
-              color={line.stream === 'stderr' ? colors.status.warning : undefined}
+              color={line.type === 'stderr' ? colors.status.warning : undefined}
             >
-              {line.text}
+              {line.data}
             </Text>
           ))}
         </Box>
       )}
 
-      {visible.length === 0 && status === 'running' && (
+      {visible.length === 0 && (status === 'running' || status === 'starting') && (
         <Box>
           <Text dimColor>Waiting for output...</Text>
         </Box>

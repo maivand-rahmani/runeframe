@@ -14,7 +14,14 @@ export interface RunningProcess {
   onStdout: (cb: (data: string) => void) => () => void
   /** Register a stderr-data listener. Returns an unsubscribe function. */
   onStderr: (cb: (data: string) => void) => () => void
-  /** Register an exit listener. Returns an unsubscribe function. */
+  /**
+   * Register a completion listener. It is invoked at most once, after the
+   * process has ended **and** its stdout/stderr streams have been fully
+   * drained and closed (the ChildProcess `close` event, which Node emits even
+   * after a spawn `error`). Receives the exit code, or `null` when no code is
+   * available (for example, the process was killed by a signal or failed to
+   * spawn). Returns an unsubscribe function.
+   */
   onExit: (cb: (code: number | null) => void) => () => void
 }
 
@@ -24,7 +31,13 @@ export interface RunningProcess {
  * `NodeProcessRunner`.
  */
 export interface ProcessRunner {
-  spawn: (command: string) => RunningProcess
+  /**
+   * Spawn a process. `command` is the executable (or a shell command line
+   * when `args` is omitted); `args` is passed through to the child process
+   * without string interpolation. Passing an explicit empty array spawns
+   * `command` with no arguments instead of treating it as a command line.
+   */
+  spawn: (command: string, args?: string[]) => RunningProcess
 }
 
 // ── Default Node.js Implementation ──
@@ -36,10 +49,14 @@ class NodeRunningProcess implements RunningProcess {
   private stdoutListeners = new Set<Listener<string>>()
   private stderrListeners = new Set<Listener<string>>()
   private exitListeners = new Set<Listener<number | null>>()
-  private exited = false
+  private finished = false
 
   constructor(proc: ChildProcess) {
     this.proc = proc
+
+    // A process may close stdin before it exits; a write racing that close
+    // must not surface as an unhandled stream error.
+    proc.stdin?.on('error', () => {})
 
     proc.stdout?.on('data', (chunk: Buffer) => {
       const text = chunk.toString()
@@ -51,26 +68,31 @@ class NodeRunningProcess implements RunningProcess {
       for (const cb of this.stderrListeners) cb(text)
     })
 
-    proc.on('exit', (code) => {
-      this.exited = true
-      for (const cb of this.exitListeners) cb(code)
-    })
+    // `close` is the sole completion signal: it fires only after the stdio
+    // streams are closed, so every chunk buffered at native `exit` time has
+    // already been delivered, and Node also emits it after a spawn `error`.
+    // The `error` listener only keeps failures (for example, a failed kill)
+    // from becoming unhandled events; an error can fire while the process is
+    // still alive and producing output, so it must not complete the session
+    // early. The once-guard keeps completion to a single notification.
+    proc.on('close', (code) => { this._finish(code) })
+    proc.on('error', () => {})
+  }
 
-    proc.on('error', () => {
-      if (!this.exited) {
-        this.exited = true
-        for (const cb of this.exitListeners) cb(null)
-      }
-    })
+  /** Deliver the terminal notification exactly once. */
+  private _finish(code: number | null): void {
+    if (this.finished) return
+    this.finished = true
+    for (const cb of this.exitListeners) cb(code)
   }
 
   sendStdin(data: string): void {
-    if (this.exited || !this.proc.stdin) return
+    if (this.finished || !this.proc.stdin?.writable) return
     this.proc.stdin.write(data)
   }
 
   kill(): void {
-    if (this.exited) return
+    if (this.finished) return
     this.proc.kill('SIGTERM')
   }
 
@@ -92,11 +114,22 @@ class NodeRunningProcess implements RunningProcess {
 
 /**
  * Default `ProcessRunner` that shells out via `child_process.spawn`.
- * Parses the command string with a simple shell-aware split.
+ *
+ * - `spawn(command)` runs `command` as a shell command line when `shell` is
+ *   enabled (the default), or splits it on unquoted whitespace otherwise.
+ * - `spawn(command, args)` executes `command` directly with `args`, without
+ *   shell parsing, so arguments are never re-joined or re-quoted. An
+ *   explicitly empty `args` array spawns `command` with no arguments; it does
+ *   not fall back to shell or command-line parsing.
+ *
+ * `RunningProcess.onExit` fires only after stdio has been drained (the
+ * underlying ChildProcess `close` event), never merely on native `exit` and
+ * never on an `error` event, which can fire while the process is still alive.
  *
  * @example
  * ```ts
  * const runner = new NodeProcessRunner()
+ * runner.spawn('npm', ['run', 'build'])
  * ```
  */
 export class NodeProcessRunner implements ProcessRunner {
@@ -106,15 +139,21 @@ export class NodeProcessRunner implements ProcessRunner {
     this.shell = options?.shell ?? true
   }
 
-  spawn(command: string): RunningProcess {
+  spawn(command: string, args?: string[]): RunningProcess {
+    if (args !== undefined) {
+      return new NodeRunningProcess(
+        spawn(command, [...args], { stdio: ['pipe', 'pipe', 'pipe'] }),
+      )
+    }
+
     if (this.shell) {
       const proc = spawn(command, { shell: true, stdio: ['pipe', 'pipe', 'pipe'] })
       return new NodeRunningProcess(proc)
     }
 
     const parts = splitCommand(command)
-    const [cmd, ...args] = parts
-    const proc = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    const [cmd, ...rest] = parts
+    const proc = spawn(cmd ?? '', rest, { stdio: ['pipe', 'pipe', 'pipe'] })
     return new NodeRunningProcess(proc)
   }
 }

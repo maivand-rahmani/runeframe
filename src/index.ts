@@ -42,26 +42,15 @@ export type { EmptyStateProps } from './components/EmptyState.js'
 export { LoadingState } from './components/LoadingState.js'
 export type { LoadingStateProps } from './components/LoadingState.js'
 export type { ScreenDefinition, ScreenCategory } from './screens/screen.js'
-export {
-  NavigationProvider,
-  useNavigation,
-  useNavigationState,
-  useNavigationActions,
-  useModalState,
-  useModalActions,
-} from './navigation/NavigationProvider.js'
+export { NavigationProvider, useNavigation } from './navigation/NavigationProvider.js'
 export type {
   NavigationEntry,
   ModalEntry,
   NavigationContextValue,
-  NavigationStateValue,
-  NavigationActionsValue,
-  ModalStateValue,
-  ModalActionsValue,
   NavigationProviderProps,
 } from './navigation/NavigationProvider.js'
 export { ScreenRegistry } from './screens/registry.js'
-export { ScreenProvider, useScreen, ScreenRenderer } from './screens/ScreenProvider.js'
+export { ScreenOutlet } from './screens/ScreenOutlet.js'
 export { StatusBar } from './components/StatusBar.js'
 export type { StatusBarProps } from './components/StatusBar.js'
 export { HotkeyHintBar } from './components/HotkeyHintBar.js'
@@ -119,25 +108,22 @@ export { CommandPalette } from './components/CommandPalette.js'
 export type { CommandPaletteProps } from './components/CommandPalette.js'
 export { NodeProcessRunner } from './commands/ProcessRunner.js'
 export type { ProcessRunner, RunningProcess } from './commands/ProcessRunner.js'
-export { useCommandSession } from './commands/useCommandSession.js'
+export {
+  AsyncSessionRunner,
+  DEFAULT_MAX_OUTPUT_LINES,
+} from './commands/AsyncSessionRunner.js'
 export type {
-  CommandSessionMode,
   SessionStatus,
-  UseCommandSessionOptions,
-  CommandSessionAPI,
-  OutputLine,
-} from './commands/useCommandSession.js'
-export { AsyncSessionRunner } from './commands/AsyncSessionRunner.js'
-export type {
-  SessionStatus as AsyncSessionStatus,
-  SessionOptions as AsyncSessionOptions,
+  SessionOptions,
   SessionEvent,
+  SessionEventType,
   SessionLifecycle,
 } from './commands/AsyncSessionRunner.js'
 export { useAsyncSession } from './commands/useAsyncSession.js'
-export type { UseAsyncSessionOptions } from './commands/useAsyncSession.js'
-export { CommandBar } from './components/CommandBar.js'
-export type { CommandBarProps } from './components/CommandBar.js'
+export type {
+  UseAsyncSessionOptions,
+  UseAsyncSessionResult,
+} from './commands/useAsyncSession.js'
 export { ProcessOutputPanel } from './components/ProcessOutputPanel.js'
 export type { ProcessOutputPanelProps } from './components/ProcessOutputPanel.js'
 export { ModalProvider, useModal } from './components/ModalProvider.js'

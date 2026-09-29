@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Text } from 'ink'
+import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
 import { NavigationProvider, useNavigation } from '../navigation/NavigationProvider.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 import { Breadcrumbs } from './Breadcrumbs.js'
 
 function createTestRegistry() {
@@ -49,6 +52,42 @@ function createTestRegistry() {
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+function cellInFrame(frame: string | undefined, text: string) {
+  const plain = (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  const lines = plain.split(/\r?\n/)
+  const y = lines.findIndex((line) => line.includes(text))
+  if (y < 0) throw new Error(`Could not find ${JSON.stringify(text)} in frame`)
+  return { x: lines[y].indexOf(text), y }
+}
+
+async function clickCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  await pressCell(stdin, cell)
+  await releaseCell(stdin, cell)
+}
+
+async function pressCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}M`)
+  await new Promise((resolve) => setTimeout(resolve, 40))
+}
+
+async function releaseCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}m`)
+  await new Promise((resolve) => setTimeout(resolve, 40))
 }
 
 describe('Breadcrumbs', () => {
@@ -265,5 +304,99 @@ describe('Breadcrumbs', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(lastFrame()).toContain('Dashboard')
     expect(lastFrame()).not.toContain('Lessons')
+  })
+
+  it('automatically hit-tests prior breadcrumb segments', async () => {
+    const selections: string[] = []
+    function Harness() {
+      const nav = useNavigation()
+      useEffect(() => {
+        nav.push('lessons')
+      }, [nav.push])
+      return <Breadcrumbs onSelect={(id) => selections.push(id)} />
+    }
+
+    const { lastFrame, stdin } = render(
+      <FrameworkProvider registry={registry} defaultScreen="dashboard">
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <Harness />
+        </MouseLayout>
+      </FrameworkProvider>,
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(lastFrame()).toContain('Dashboard')
+    expect(lastFrame()).toContain('Lessons')
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Dashboard'))
+
+    expect(selections).toEqual(['dashboard'])
+  })
+
+  it('uses the latest committed onSelect callback for mouse activation', async () => {
+    const selections: string[] = []
+    let updateCallback = () => {}
+    function Harness() {
+      const nav = useNavigation()
+      const [revision, setRevision] = useState(0)
+      updateCallback = () => setRevision(1)
+      useEffect(() => {
+        nav.push('lessons')
+      }, [nav.push])
+      return (
+        <Breadcrumbs
+          onSelect={(id) => selections.push(`${revision}:${id}`)}
+        />
+      )
+    }
+
+    const { lastFrame, stdin } = render(
+      <FrameworkProvider registry={registry} defaultScreen="dashboard">
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <Harness />
+        </MouseLayout>
+      </FrameworkProvider>,
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    updateCallback()
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Dashboard'))
+
+    expect(selections).toEqual(['1:dashboard'])
+  })
+
+  it('resolves a breadcrumb again after the trail changes during a press', async () => {
+    const selections: string[] = []
+    let extendTrail = () => {}
+    function Harness() {
+      const nav = useNavigation()
+      const [extended, setExtended] = useState(false)
+      extendTrail = () => setExtended(true)
+      useEffect(() => {
+        nav.push('lessons')
+        nav.push('lessonDetail')
+      }, [nav.push])
+      useEffect(() => {
+        if (extended) nav.push('speak')
+      }, [extended, nav.push])
+      return <Breadcrumbs onSelect={(id) => selections.push(id)} />
+    }
+
+    const { lastFrame, stdin } = render(
+      <FrameworkProvider registry={registry} defaultScreen="dashboard">
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <Harness />
+        </MouseLayout>
+      </FrameworkProvider>,
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const lessonsCell = cellInFrame(lastFrame(), 'Lessons')
+    await pressCell(stdin, lessonsCell)
+    extendTrail()
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    await releaseCell(stdin, lessonsCell)
+
+    expect(selections).toEqual(['lessons'])
   })
 })

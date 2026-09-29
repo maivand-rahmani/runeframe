@@ -1,4 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
@@ -7,6 +13,10 @@ import { useRegisterActions } from '../commands/ScopedActionRegistryProvider.js'
 import { InputConsumptionResult } from '../types.js'
 import { MouseArea } from '../interaction/MouseArea.js'
 import type { MouseBounds } from '../interaction/MouseArea.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
 
 // ── Data Types ──
 
@@ -36,6 +46,12 @@ export function ListSelect<T>({
 }: ListSelectProps<T>) {
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
+  const mouseGeometry = useMouseGeometry()
+  const mouseRegistry = useMouseRegistry()
+  const autoMouseEnabled =
+    mouseBoundsForItem == null &&
+    mouseGeometry != null &&
+    mouseRegistry != null
   const onSelectRef = useRef(onSelect)
   const itemsRef = useRef(items)
   const mouseBoundsForItemRef = useRef(mouseBoundsForItem)
@@ -84,6 +100,18 @@ export function ListSelect<T>({
     ) {
       return
     }
+
+    focusIndexRef.current = index
+    setFocusIndex(index)
+    onSelectRef.current(currentItem.value)
+  }
+
+  const handleAutoMouseSelect = (
+    item: ListSelectItem<T>,
+    index: number,
+  ) => {
+    const currentItem = itemsRef.current[index]
+    if (currentItem !== item || currentItem.disabled) return
 
     focusIndexRef.current = index
     setFocusIndex(index)
@@ -190,45 +218,71 @@ export function ListSelect<T>({
   }
 
   return (
-    <Box flexDirection="column">
+    <MouseLayout flexDirection="column">
       {items.map((item, idx) => {
         const isFocused = idx === focusIndex
-        const isDisabled = item.disabled
+        const isDisabled = Boolean(item.disabled)
 
-        const row = (
-          <Box key={idx}>
-            <Text
-              color={
-                isDisabled
-                  ? colors.text.muted
-                  : isFocused
-                    ? colors.focus.active
-                    : colors.text.primary
-              }
-              bold={isFocused && !isDisabled}
-              dimColor={isDisabled}
-            >
-              {item.label}
-            </Text>
-          </Box>
+        const rowContents = (
+          <Text
+            color={
+              isDisabled
+                ? colors.text.muted
+                : isFocused
+                  ? colors.focus.active
+                  : colors.text.primary
+            }
+            bold={isFocused && !isDisabled}
+            dimColor={isDisabled}
+          >
+            {item.label}
+          </Text>
         )
         const mouseBounds = mouseBoundsForItem?.(item, idx)
+        const rowKey = getMouseAreaKey(item, idx)
 
-        if (mouseBounds == null) return row
+        if (mouseBounds != null) {
+          return (
+            <MouseArea
+              key={rowKey}
+              bounds={mouseBounds}
+              disabled={isDisabled}
+              onClick={() => handleMouseSelect(item, idx, mouseBounds)}
+            >
+              <Box>{rowContents}</Box>
+            </MouseArea>
+          )
+        }
 
-        return (
-          <MouseArea
-            key={getMouseAreaKey(item, idx)}
-            bounds={mouseBounds}
-            disabled={isDisabled}
-            onClick={() => handleMouseSelect(item, idx, mouseBounds)}
-          >
-            {row}
-          </MouseArea>
-        )
+        if (autoMouseEnabled) {
+          return (
+            <ListSelectAutoRow
+              key={rowKey}
+              disabled={isDisabled}
+              onClick={() => handleAutoMouseSelect(item, idx)}
+            >
+              {rowContents}
+            </ListSelectAutoRow>
+          )
+        }
+
+        return <Box key={rowKey}>{rowContents}</Box>
       })}
-    </Box>
+    </MouseLayout>
   )
+}
+
+function ListSelectAutoRow({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: ReactNode
+  disabled: boolean
+  onClick: () => void
+}) {
+  const ref = useAutoMouseArea({ disabled, onClick })
+  return <Box ref={ref}>{children}</Box>
 }
 
 function sameMouseBounds(left: MouseBounds, right: MouseBounds): boolean {

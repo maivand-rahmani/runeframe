@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { render as inkRender, Text } from 'ink'
 import { render } from 'ink-testing-library'
+import { useEffect, useRef } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import {
   KeyboardScopeProvider,
@@ -15,6 +16,8 @@ import {
 } from './MouseProvider.js'
 import { MouseArea, type MouseBounds, type MouseClickEvent } from './MouseArea.js'
 import { useKeyHandler } from './useKeyHandler.js'
+import { FocusTreeProvider } from './FocusTreeProvider.js'
+import { useInputFocus } from './useInputFocus.js'
 import {
   NavigationProvider,
   useNavigation,
@@ -555,6 +558,234 @@ describe('MouseProvider scopes and modal routing', () => {
   })
 })
 
+describe('MouseProvider press/release cancellation', () => {
+  const AREA = { x: 0, y: 0, width: 4, height: 4 }
+
+  it('cancels activation when a modal opens mid-gesture, even if it closes before release', async () => {
+    const onClick = vi.fn()
+    let navigation: ReturnType<typeof useNavigation> | null = null
+
+    function Capture() {
+      navigation = useNavigation()
+      return null
+    }
+
+    const { stdin } = render(
+      harness(
+        <>
+          <Capture />
+          <MouseArea bounds={AREA} onClick={onClick} />
+        </>,
+      ),
+    )
+
+    // Modal opens while the button is held: the background press is stale.
+    await press(stdin, 2, 2)
+    navigation!.pushModal('modal-screen')
+    await delay()
+    await release(stdin, 2, 2)
+    expect(onClick).not.toHaveBeenCalled()
+    navigation!.popModal()
+    await delay()
+
+    // A modal that opened and closed during one gesture also cancels, even
+    // though the background area is reachable again at release time.
+    await press(stdin, 2, 2)
+    navigation!.pushModal('modal-screen')
+    await delay()
+    navigation!.popModal()
+    await delay()
+    await release(stdin, 2, 2)
+    expect(onClick).not.toHaveBeenCalled()
+
+    // A plain press/release after the modal is gone still activates.
+    await click(stdin, 2, 2)
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a compatible press when an unrelated scope is pushed mid-gesture', async () => {
+    const onClick = vi.fn()
+    let keyboard: ReturnType<typeof useKeyboardScope> | null = null
+
+    function Capture() {
+      keyboard = useKeyboardScope()
+      return null
+    }
+
+    const { stdin } = render(
+      harness(
+        <>
+          <Capture />
+          <MouseArea bounds={AREA} onClick={onClick} />
+        </>,
+      ),
+    )
+
+    // The pressed area stays eligible and stays the resolved target, so a
+    // scope stack addition elsewhere must not cancel the click.
+    await press(stdin, 2, 2)
+    keyboard!.pushScope('list')
+    await delay()
+    await release(stdin, 2, 2)
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not activate a stale or newly promoted target when a scope change reroutes the point', async () => {
+    const background = vi.fn()
+    const promoted = vi.fn()
+    let keyboard: ReturnType<typeof useKeyboardScope> | null = null
+
+    function Capture() {
+      keyboard = useKeyboardScope()
+      return null
+    }
+
+    const { stdin } = render(
+      harness(
+        <>
+          <Capture />
+          <MouseArea bounds={AREA} onClick={background} />
+          <MouseArea
+            bounds={AREA}
+            scope="list"
+            priority={5}
+            onClick={promoted}
+          />
+        </>,
+      ),
+    )
+
+    // `list` is inactive at press: the background area is the press target.
+    await press(stdin, 2, 2)
+    // Activating it promotes a higher-priority target under the same point.
+    keyboard!.pushScope('list')
+    await delay()
+    await release(stdin, 2, 2)
+    expect(background).not.toHaveBeenCalled()
+    expect(promoted).not.toHaveBeenCalled()
+
+    // A fresh gesture starts on the promoted target and activates it.
+    await click(stdin, 2, 2)
+    expect(promoted).toHaveBeenCalledTimes(1)
+    expect(background).not.toHaveBeenCalled()
+  })
+
+  it('cancels activation when the pressed scope becomes ineligible before release', async () => {
+    const onClick = vi.fn()
+    let keyboard: ReturnType<typeof useKeyboardScope> | null = null
+
+    function Capture() {
+      keyboard = useKeyboardScope()
+      return null
+    }
+
+    const { stdin } = render(
+      harness(
+        <>
+          <Capture />
+          <MouseArea bounds={AREA} scope="list" onClick={onClick} />
+        </>,
+      ),
+    )
+
+    keyboard!.pushScope('list')
+    await delay()
+    await press(stdin, 2, 2)
+    keyboard!.popScope('list')
+    await delay()
+    await release(stdin, 2, 2)
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('consumes but never activates a target disabled at press or disabled before release', async () => {
+    const onClick = vi.fn()
+    let disabled = false
+
+    function Host() {
+      return <MouseArea bounds={AREA} disabled={disabled} onClick={onClick} />
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+
+    // Enabled at press, disabled before release.
+    await press(stdin, 2, 2)
+    disabled = true
+    rerender(harness(<Host />))
+    await delay()
+    await release(stdin, 2, 2)
+    expect(onClick).not.toHaveBeenCalled()
+
+    // Disabled at press, re-enabled before release: the stale gesture still
+    // must not activate.
+    await press(stdin, 2, 2)
+    disabled = false
+    rerender(harness(<Host />))
+    await delay()
+    await release(stdin, 2, 2)
+    expect(onClick).not.toHaveBeenCalled()
+
+    // A fully enabled press/release still activates.
+    await click(stdin, 2, 2)
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not activate a stale target that lost resolution to a later registration', async () => {
+    const underlying = vi.fn()
+    const overlay = vi.fn()
+    let showOverlay = false
+
+    function Host() {
+      return (
+        <>
+          <MouseArea bounds={AREA} onClick={underlying} />
+          {showOverlay ? (
+            // Same priority: the later registration wins the tie at release.
+            <MouseArea bounds={AREA} onClick={overlay} />
+          ) : null}
+        </>
+      )
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+
+    await press(stdin, 2, 2)
+    showOverlay = true
+    rerender(harness(<Host />))
+    await delay()
+    await release(stdin, 2, 2)
+
+    // Release resolves to the overlay, not the pressed area: neither fires.
+    expect(underlying).not.toHaveBeenCalled()
+    expect(overlay).not.toHaveBeenCalled()
+
+    // A gesture that starts on the overlay does activate it.
+    await click(stdin, 2, 2)
+    expect(overlay).toHaveBeenCalledTimes(1)
+    expect(underlying).not.toHaveBeenCalled()
+  })
+
+  it('does not activate a replacement target mounted at the pressed bounds', async () => {
+    const onClick = vi.fn()
+    let version = 0
+
+    function Host() {
+      return <MouseArea key={version} bounds={AREA} onClick={onClick} />
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+
+    await press(stdin, 2, 2)
+    version += 1
+    rerender(harness(<Host />))
+    await delay()
+    await release(stdin, 2, 2)
+    expect(onClick).not.toHaveBeenCalled()
+
+    await click(stdin, 2, 2)
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('MouseProvider input interleaving', () => {
   const AREA = { x: 0, y: 0, width: 3, height: 3 }
 
@@ -889,5 +1120,268 @@ describe('MouseProvider TTY lifecycle', () => {
 describe('MouseProvider defaults', () => {
   it('exports a prefix timeout comfortably above Ink’s 20ms CSI flush', () => {
     expect(DEFAULT_MOUSE_PREFIX_TIMEOUT_MS).toBeGreaterThan(20)
+  })
+})
+
+// ── Phase 2: input-focus bridge ────────────────────────────────────────
+
+interface InputFocusHandle {
+  id: string
+  focused: boolean
+  focus: () => void
+  /**
+   * Live readiness flag for typing. `focused` flips one commit before the
+   * field's `useKeyHandler` re-registers with `enabled: focused`, and
+   * `stdin.write` is synchronous, so tests must wait for this instead of
+   * assuming a fixed delay is enough.
+   */
+  handlerReady: { current: boolean }
+}
+
+/**
+ * Minimal editable-control probe: gates its key handler on the bridge hook's
+ * `focused` flag exactly the way real inputs are expected to, so typing only
+ * reaches the active field.
+ */
+function FocusField({
+  id,
+  label,
+  seen,
+  capture,
+}: {
+  id: string
+  label: string
+  seen: string[]
+  capture?: { current: InputFocusHandle | null }
+}) {
+  const state = useInputFocus(id)
+  const { activeScopes } = useKeyboardScope()
+  const handlerReady = useRef(false)
+  useKeyHandler(
+    (event) => {
+      if (event.isPrintable) {
+        seen.push(`${label}:${event.text}`)
+        return true
+      }
+    },
+    'textinput',
+    { enabled: state.focused, priority: 60 },
+  )
+  // Effects run in hook order, so this probe only flips after useKeyHandler's
+  // scope and registration effects for the current focus state have run, and
+  // after the scope stack has committed 'textinput' into the dispatchable set.
+  // Only then can a synchronous `stdin.write` reach this field's handler.
+  const scopeActive = activeScopes.includes('textinput')
+  useEffect(() => {
+    handlerReady.current = state.focused && scopeActive
+  }, [state.focused, scopeActive])
+  if (capture) {
+    capture.current = {
+      id: state.id,
+      focused: state.focused,
+      focus: state.focus,
+      handlerReady,
+    }
+  }
+  return <Text>{`${label}:${state.focused ? 'focused' : 'blurred'}`}</Text>
+}
+
+/**
+ * Wait for the field's key handler to become dispatchable before typing:
+ * registration effects have run and the scope stack render is committed.
+ * This is a condition wait, not a timeout bump — it completes as soon as the
+ * handler is registered and fails if it never is.
+ */
+async function waitForHandlerReady(handle: {
+  current: InputFocusHandle | null
+}): Promise<void> {
+  await vi.waitFor(() => {
+    expect(handle.current?.handlerReady.current).toBe(true)
+  })
+}
+
+function DynamicFocusFields({
+  fields,
+  seen,
+  captures,
+}: {
+  fields: string[]
+  seen: string[]
+  captures?: Record<string, { current: InputFocusHandle | null }>
+}) {
+  return (
+    <KeyboardScopeProvider>
+      <FocusTreeProvider>
+        {fields.map((field) => (
+          <FocusField
+            key={field}
+            id={`field-${field}`}
+            label={field}
+            seen={seen}
+            capture={captures?.[field]}
+          />
+        ))}
+      </FocusTreeProvider>
+    </KeyboardScopeProvider>
+  )
+}
+
+describe('useInputFocus bridge', () => {
+  it('gives the first registered field default focus and routes keys only there', async () => {
+    const seen: string[] = []
+    const first = { current: null as InputFocusHandle | null }
+    const second = { current: null as InputFocusHandle | null }
+
+    const { lastFrame, stdin } = render(
+      <KeyboardScopeProvider>
+        <FocusTreeProvider>
+          <FocusField
+            id="first-field"
+            label="first"
+            seen={seen}
+            capture={first}
+          />
+          <FocusField
+            id="second-field"
+            label="second"
+            seen={seen}
+            capture={second}
+          />
+        </FocusTreeProvider>
+      </KeyboardScopeProvider>,
+    )
+
+    await vi.waitFor(() => {
+      expect(lastFrame()).toContain('first:focused')
+      expect(lastFrame()).toContain('second:blurred')
+    })
+    expect(first.current?.id).toBe('first-field')
+    expect(first.current?.focused).toBe(true)
+    expect(second.current?.focused).toBe(false)
+
+    await waitForHandlerReady(first)
+    stdin.write('a')
+    await delay()
+    expect(seen).toEqual(['first:a'])
+  })
+
+  it('makes a focused field the sole keyboard-enabled one', async () => {
+    const seen: string[] = []
+    const first = { current: null as InputFocusHandle | null }
+    const second = { current: null as InputFocusHandle | null }
+
+    const { lastFrame, stdin } = render(
+      <KeyboardScopeProvider>
+        <FocusTreeProvider>
+          <FocusField id="first" label="first" seen={seen} capture={first} />
+          <FocusField id="second" label="second" seen={seen} capture={second} />
+        </FocusTreeProvider>
+      </KeyboardScopeProvider>,
+    )
+
+    await vi.waitFor(() => {
+      expect(lastFrame()).toContain('first:focused')
+    })
+
+    second.current!.focus()
+    await vi.waitFor(() => {
+      expect(lastFrame()).toContain('first:blurred')
+      expect(lastFrame()).toContain('second:focused')
+    })
+    await waitForHandlerReady(second)
+
+    stdin.write('b')
+    await delay()
+    expect(seen).toEqual(['second:b'])
+
+    first.current!.focus()
+    await vi.waitFor(() => {
+      expect(lastFrame()).toContain('first:focused')
+    })
+    await waitForHandlerReady(first)
+    stdin.write('c')
+    await delay()
+    expect(seen).toEqual(['second:b', 'first:c'])
+  })
+
+  it('falls back to a remaining field on active unmount and defaults a later registration', async () => {
+    const seen: string[] = []
+    const second = { current: null as InputFocusHandle | null }
+    const third = { current: null as InputFocusHandle | null }
+    const captures = { second, third }
+
+    const { lastFrame, stdin, rerender } = render(
+      <DynamicFocusFields
+        fields={['first', 'second']}
+        seen={seen}
+        captures={captures}
+      />,
+    )
+
+    await vi.waitFor(() => {
+      expect(lastFrame()).toContain('first:focused')
+      expect(lastFrame()).toContain('second:blurred')
+    })
+
+    // Unmount the active field: the remaining registration takes focus.
+    rerender(
+      <DynamicFocusFields
+        fields={['second']}
+        seen={seen}
+        captures={captures}
+      />,
+    )
+    await vi.waitFor(() => {
+      expect(lastFrame()).not.toContain('first:')
+      expect(lastFrame()).toContain('second:focused')
+    })
+    await waitForHandlerReady(second)
+
+    stdin.write('d')
+    await delay()
+    expect(seen).toEqual(['second:d'])
+
+    // No remaining field: the leaf clears. A later registration then receives
+    // default focus, because it is again the first registered field.
+    rerender(
+      <DynamicFocusFields fields={[]} seen={seen} captures={captures} />,
+    )
+    await delay()
+    rerender(
+      <DynamicFocusFields
+        fields={['third']}
+        seen={seen}
+        captures={captures}
+      />,
+    )
+    await vi.waitFor(() => {
+      expect(lastFrame()).toContain('third:focused')
+    })
+    await waitForHandlerReady(third)
+
+    stdin.write('e')
+    await delay()
+    expect(seen).toEqual(['second:d', 'third:e'])
+  })
+
+  it('keeps a solitary control keyboard-focused outside FocusTreeProvider', async () => {
+    const seen: string[] = []
+    const solo = { current: null as InputFocusHandle | null }
+
+    const { lastFrame, stdin } = render(
+      <KeyboardScopeProvider>
+        <FocusField id="solo" label="solo" seen={seen} capture={solo} />
+      </KeyboardScopeProvider>,
+    )
+
+    await vi.waitFor(() => {
+      expect(lastFrame()).toContain('solo:focused')
+    })
+    expect(solo.current?.focused).toBe(true)
+
+    await waitForHandlerReady(solo)
+    stdin.write('x')
+    await delay()
+    expect(seen).toEqual(['solo:x'])
   })
 })

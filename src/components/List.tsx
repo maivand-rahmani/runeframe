@@ -10,6 +10,10 @@ import { LAYOUT } from '../constants.js'
 import { InputConsumptionResult } from '../types.js'
 import { MouseArea } from '../interaction/MouseArea.js'
 import type { MouseBounds } from '../interaction/MouseArea.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
 
 // ── Data Types ──
 
@@ -43,6 +47,12 @@ export function List<T extends ListItem>({
   mouseBoundsForItem,
   renderItem,
 }: ListProps<T>) {
+  const mouseGeometry = useMouseGeometry()
+  const mouseRegistry = useMouseRegistry()
+  const autoMouseEnabled =
+    mouseBoundsForItem == null &&
+    mouseGeometry != null &&
+    mouseRegistry != null
   const safeMaxVisible = Math.max(1, maxVisible)
   const displayItems =
     items.length > safeMaxVisible
@@ -101,6 +111,18 @@ export function List<T extends ListItem>({
     [],
   )
 
+  const handleAutoMouseSelect = useCallback(
+    (id: string, focusItem: () => void) => {
+      if (!displayItemsRef.current.some((item) => item.id === id)) return
+
+      activateGroupRef.current()
+      if (focusedIdRef.current !== id) skipMouseFocusSelectRef.current = id
+      focusItem()
+      onSelectRef.current?.(id)
+    },
+    [],
+  )
+
   useKeyHandler(
     (event) => {
       if (!event.enter) return InputConsumptionResult.NotConsumed
@@ -132,14 +154,16 @@ export function List<T extends ListItem>({
 
   return (
     <GroupProvider>
-      <Box flexDirection="column">
+      <MouseLayout flexDirection="column">
         {displayItems.map((item, index) => (
           <ListItemRow
             key={item.id}
             item={item}
             selectedId={selectedId}
             mouseBounds={mouseBoundsForItem?.(item, index)}
+            autoMouseEnabled={autoMouseEnabled}
             onMouseSelect={handleMouseSelect}
+            onAutoMouseSelect={handleAutoMouseSelect}
             renderItem={
               renderItem as
                 | ((
@@ -150,7 +174,7 @@ export function List<T extends ListItem>({
             }
           />
         ))}
-      </Box>
+      </MouseLayout>
     </GroupProvider>
   )
 }
@@ -161,11 +185,13 @@ interface ListItemRowProps {
   item: ListItem
   selectedId?: string
   mouseBounds?: MouseBounds
+  autoMouseEnabled: boolean
   onMouseSelect?: (
     id: string,
     focusItem: () => void,
     renderedBounds: MouseBounds,
   ) => void
+  onAutoMouseSelect?: (id: string, focusItem: () => void) => void
   renderItem?: (
     item: ListItem,
     state: { focused: boolean; selected: boolean },
@@ -176,16 +202,19 @@ function ListItemRow({
   item,
   selectedId,
   mouseBounds,
+  autoMouseEnabled,
   onMouseSelect,
+  onAutoMouseSelect,
   renderItem,
 }: ListItemRowProps) {
   const { colors } = useTheme()
   const { focused, onActivate } = useFocusable({ id: item.id })
   const isSelected = selectedId === item.id
 
-  let row: ReactElement
+  let rowContents: ReactElement
+  let flexDirection: 'column' | undefined
   if (renderItem) {
-    row = <Box>{renderItem(item, { focused, selected: isSelected })}</Box>
+    rowContents = renderItem(item, { focused, selected: isSelected })
   } else {
     const labelColor = focused
       ? colors.focus.ring
@@ -193,8 +222,8 @@ function ListItemRow({
         ? colors.focus.active
         : colors.text.primary
 
-    row = (
-      <Box flexDirection="column">
+    rowContents = (
+      <>
         <Box>
           <Text color={labelColor} bold={isSelected}>
             {isSelected ? '• ' : '  '}
@@ -209,19 +238,50 @@ function ListItemRow({
             </Text>
           </Box>
         )}
-      </Box>
+      </>
+    )
+    flexDirection = 'column'
+  }
+
+  if (mouseBounds != null) {
+    return (
+      <MouseArea
+        bounds={mouseBounds}
+        onClick={() => onMouseSelect?.(item.id, onActivate, mouseBounds)}
+      >
+        <Box flexDirection={flexDirection}>{rowContents}</Box>
+      </MouseArea>
     )
   }
 
-  if (mouseBounds == null) return row
+  if (autoMouseEnabled) {
+    return (
+      <AutoListItemRow
+        flexDirection={flexDirection}
+        onClick={() => onAutoMouseSelect?.(item.id, onActivate)}
+      >
+        {rowContents}
+      </AutoListItemRow>
+    )
+  }
 
+  return <Box flexDirection={flexDirection}>{rowContents}</Box>
+}
+
+function AutoListItemRow({
+  children,
+  flexDirection,
+  onClick,
+}: {
+  children: ReactElement
+  flexDirection?: 'column'
+  onClick: () => void
+}) {
+  const ref = useAutoMouseArea({ onClick })
   return (
-    <MouseArea
-      bounds={mouseBounds}
-      onClick={() => onMouseSelect?.(item.id, onActivate, mouseBounds)}
-    >
-      {row}
-    </MouseArea>
+    <Box ref={ref} flexDirection={flexDirection}>
+      {children}
+    </Box>
   )
 }
 

@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render } from 'ink-testing-library'
+import { useEffect, type ReactNode } from 'react'
 import type { ReactElement } from 'react'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
+import { useKeyboardScope } from '../interaction/KeyboardScopeProvider.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
+import { ScreenRegistry } from '../screens/registry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 import { ActionRegistry } from '../commands/ActionRegistry.js'
 import { CommandPalette } from './CommandPalette.js'
 
@@ -58,6 +63,38 @@ function renderInTheme(ui: ReactElement) {
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
 }
+
+function cellInFrame(frame: string | undefined, text: string) {
+  const plain = (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  const lines = plain.split(/\r?\n/)
+  const y = lines.findIndex((line) => line.includes(text))
+  if (y < 0) throw new Error(`Could not find ${JSON.stringify(text)} in frame`)
+  return { x: lines[y].indexOf(text), y }
+}
+
+async function clickCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+function CommandScope({ children }: { children: ReactNode }) {
+  const keyboardScope = useKeyboardScope()
+  useEffect(() => {
+    keyboardScope.pushScope('command')
+    return () => keyboardScope.popScope('command')
+  }, [keyboardScope.pushScope, keyboardScope.popScope])
+  return children
+}
+
+const interactionRegistry = new ScreenRegistry()
+interactionRegistry.register({ id: 'test', title: 'Test', component: () => null })
 
 describe('CommandPalette', () => {
   let registry: ActionRegistry
@@ -220,5 +257,48 @@ describe('CommandPalette', () => {
     await delay()
     expect(lastFrame()).toContain('Speaking Practice')
     expect(lastFrame()).toContain('Start Daily Plan')
+  })
+
+  it('click selects a command result and Enter still activates it', async () => {
+    const executed: string[] = []
+    const execRegistry = new ActionRegistry()
+    execRegistry.register({
+      id: 'first',
+      label: 'First Action',
+      category: 'test',
+      handler: () => executed.push('first'),
+    })
+    execRegistry.register({
+      id: 'second',
+      label: 'Second Action',
+      category: 'test',
+      handler: () => executed.push('second'),
+    })
+
+    let closed = false
+    const { stdin, lastFrame } = render(
+      <FrameworkProvider registry={interactionRegistry} defaultScreen="test">
+        <CommandScope>
+          <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+            <CommandPalette
+              registry={execRegistry}
+              onClose={() => {
+                closed = true
+              }}
+            />
+          </MouseLayout>
+        </CommandScope>
+      </FrameworkProvider>,
+    )
+
+    await delay(120)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Second Action'))
+    expect(lastFrame()).toContain('> Second Action')
+    expect(executed).toEqual([])
+
+    stdin.write('\r')
+    await delay()
+    expect(executed).toEqual(['second'])
+    expect(closed).toBe(true)
   })
 })

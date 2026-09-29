@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Box, Text } from 'ink'
 import type { ReactElement } from 'react'
@@ -8,8 +8,10 @@ import { FocusTreeProvider, useFocusable, useFocusGroup } from '../interaction/F
 import { NavigationProvider, useNavigation } from '../navigation/NavigationProvider.js'
 import { FrameworkProvider } from '../FrameworkProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 import { AppShell } from './AppShell.js'
 import { Sidebar, type SidebarItem } from './Sidebar.js'
+import { Button } from './Button.js'
 
 function createTestRegistry() {
   const registry = new ScreenRegistry()
@@ -92,6 +94,26 @@ function renderInTheme(ui: ReactElement) {
 
 function delay(ms = 40) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function cellInFrame(frame: string | undefined, text: string) {
+  const plain = (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  const lines = plain.split(/\r?\n/)
+  const y = lines.findIndex((line) => line.includes(text))
+  if (y < 0) throw new Error(`Could not find ${JSON.stringify(text)} in frame`)
+  return { x: lines[y].indexOf(text), y }
+}
+
+async function clickCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
 }
 
 describe('Sidebar', () => {
@@ -236,6 +258,48 @@ describe('Sidebar', () => {
 
     expect(lastFrame()).toContain('Current: plan')
     expect(lastFrame()).toContain('› Plan')
+  })
+
+  it('automatically hit-tests sidebar rows and keeps keyboard focus there', async () => {
+    function CurrentScreen() {
+      const { currentScreenId } = useNavigation()
+      return <Text>Current: {currentScreenId}</Text>
+    }
+
+    const { lastFrame, stdin } = render(
+      <FrameworkProvider registry={registry} defaultScreen="dashboard">
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <Sidebar items={sidebarItems} columns={120} />
+          <CurrentScreen />
+        </MouseLayout>
+      </FrameworkProvider>,
+    )
+
+    await delay(120)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Plan'))
+
+    expect(lastFrame()).toContain('Current: plan')
+    expect(lastFrame()).toContain('› Plan')
+  })
+
+  it('composes automatic footer targets through the measured sidebar path', async () => {
+    const onActivate = vi.fn()
+    const { lastFrame, stdin } = render(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <FrameworkProvider registry={registry} defaultScreen="dashboard">
+          <Sidebar
+            items={sidebarItems}
+            columns={120}
+            footer={<Button onActivate={onActivate}>Footer action</Button>}
+          />
+        </FrameworkProvider>
+      </MouseLayout>,
+    )
+
+    await delay(120)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Footer action'))
+
+    expect(onActivate).toHaveBeenCalledTimes(1)
   })
 
   it('moves between the sidebar and content with Tab and horizontal arrows', async () => {

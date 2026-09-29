@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { render } from 'ink-testing-library'
-import { useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
+import { useKeyboardScope } from '../interaction/KeyboardScopeProvider.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
+import { ScreenRegistry } from '../screens/registry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 import { Tabs, type Tab } from './Tabs.js'
 
 function renderInTheme(ui: ReactElement) {
@@ -16,6 +20,45 @@ function renderInTheme(ui: ReactElement) {
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
 }
+
+function cellInFrame(frame: string | undefined, text: string) {
+  const plain = (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  const lines = plain.split(/\r?\n/)
+  const y = lines.findIndex((line) => line.includes(text))
+  if (y < 0) throw new Error(`Could not find ${JSON.stringify(text)} in frame`)
+  return { x: lines[y].indexOf(text), y }
+}
+
+async function clickCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  await pressCell(stdin, cell)
+  await releaseCell(stdin, cell)
+}
+
+async function pressCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}M`)
+  await delay()
+}
+
+async function releaseCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+const tabRegistry = new ScreenRegistry()
+tabRegistry.register({ id: 'test', title: 'Test', component: () => null })
 
 describe('Tabs', () => {
   const sampleTabs: Tab[] = [
@@ -155,6 +198,112 @@ describe('Tabs', () => {
     stdin.write('\u001b[C\u001b[C\u001b[C\u001b[D')
 
     expect(changes).toEqual(['vocab', 'vocab', 'vocab', 'speaking'])
+  })
+
+  it('click selects a tab and subsequent arrows use the clicked tab', async () => {
+    const changes: string[] = []
+    function Harness() {
+      const [activeId, setActiveId] = useState('grammar')
+      const keyboardScope = useKeyboardScope()
+      useEffect(() => {
+        keyboardScope.pushScope('list')
+        return () => keyboardScope.popScope('list')
+      }, [keyboardScope.pushScope, keyboardScope.popScope])
+
+      return (
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <Tabs
+            tabs={sampleTabs}
+            activeTabId={activeId}
+            onChange={(id) => {
+              changes.push(id)
+              setActiveId(id)
+            }}
+          />
+        </MouseLayout>
+      )
+    }
+
+    const { stdin, lastFrame } = render(
+      <FrameworkProvider registry={tabRegistry} defaultScreen="test">
+        <Harness />
+      </FrameworkProvider>,
+    )
+
+    await delay(120)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Vocabulary'))
+    expect(changes).toEqual(['vocab'])
+
+    stdin.write('\u001B[C')
+    await delay()
+    expect(changes).toEqual(['vocab', 'speaking'])
+  })
+
+  it('uses the latest committed onChange callback for mouse activation', async () => {
+    const changes: string[] = []
+    let updateCallback = () => {}
+    function Harness() {
+      const [revision, setRevision] = useState(0)
+      updateCallback = () => setRevision(1)
+      return (
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <Tabs
+            tabs={sampleTabs}
+            activeTabId="grammar"
+            onChange={(id) => changes.push(`${revision}:${id}`)}
+          />
+        </MouseLayout>
+      )
+    }
+
+    const { stdin, lastFrame } = render(
+      <FrameworkProvider registry={tabRegistry} defaultScreen="test">
+        <Harness />
+      </FrameworkProvider>,
+    )
+
+    await delay(120)
+    updateCallback()
+    await delay(80)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Vocabulary'))
+
+    expect(changes).toEqual(['1:vocab'])
+  })
+
+  it('does not release a pressed tab onto a different tab after reorder', async () => {
+    const changes: string[] = []
+    let reverseTabs = () => {}
+    function Harness() {
+      const [reversed, setReversed] = useState(false)
+      reverseTabs = () => setReversed(true)
+      return (
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <Tabs
+            tabs={reversed ? [...sampleTabs].reverse() : sampleTabs}
+            activeTabId="grammar"
+            onChange={(id) => changes.push(id)}
+          />
+        </MouseLayout>
+      )
+    }
+
+    const { stdin, lastFrame } = render(
+      <FrameworkProvider registry={tabRegistry} defaultScreen="test">
+        <Harness />
+      </FrameworkProvider>,
+    )
+
+    await delay(120)
+    const firstTabCell = cellInFrame(lastFrame(), 'Grammar')
+    await pressCell(stdin, firstTabCell)
+    reverseTabs()
+    await delay(80)
+    await releaseCell(stdin, firstTabCell)
+
+    expect(changes).toEqual([])
+
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Speaking'))
+    expect(changes).toEqual(['speaking'])
   })
 
   it('truncates long labels', () => {

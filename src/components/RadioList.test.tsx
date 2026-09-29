@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { render } from 'ink-testing-library'
+import { useEffect, type ReactNode } from 'react'
 import type { ReactElement } from 'react'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
+import { useKeyboardScope } from '../interaction/KeyboardScopeProvider.js'
 import { ScopedActionRegistryProvider } from '../commands/ScopedActionRegistryProvider.js'
 import { FrameworkProvider } from '../FrameworkProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 import { RadioList } from './RadioList.js'
 
 function renderInTheme(ui: ReactElement) {
@@ -31,6 +34,35 @@ function renderInFramework(ui: ReactElement) {
 
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+function cellInFrame(frame: string | undefined, text: string) {
+  const plain = (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  const lines = plain.split(/\r?\n/)
+  const y = lines.findIndex((line) => line.includes(text))
+  if (y < 0) throw new Error(`Could not find ${JSON.stringify(text)} in frame`)
+  return { x: lines[y].indexOf(text), y }
+}
+
+async function clickCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+function ListScope({ children }: { children: ReactNode }) {
+  const keyboardScope = useKeyboardScope()
+  useEffect(() => {
+    keyboardScope.pushScope('list')
+    return () => keyboardScope.popScope('list')
+  }, [keyboardScope.pushScope, keyboardScope.popScope])
+  return children
 }
 
 const sampleOptions = [
@@ -180,5 +212,31 @@ describe('RadioList', () => {
     await delay()
 
     expect(selected).toEqual(['a'])
+  })
+
+  it('automatically hit-tests options, consumes disabled rows, and focuses the clicked option', async () => {
+    const selected: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <ListScope>
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <RadioList
+            options={optionsWithDisabled}
+            selected={null}
+            onSelect={(value) => selected.push(value)}
+          />
+        </MouseLayout>
+      </ListScope>,
+    )
+
+    await delay(120)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Beta'))
+    expect(selected).toEqual([])
+
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Gamma'))
+    expect(selected).toEqual(['c'])
+
+    stdin.write('\r')
+    await delay()
+    expect(selected).toEqual(['c', 'c'])
   })
 })

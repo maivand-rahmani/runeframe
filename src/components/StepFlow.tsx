@@ -2,6 +2,45 @@ import { useState, useCallback, useRef, useEffect, type ReactNode } from 'react'
 import { Box, Text } from 'ink'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { InputConsumptionResult } from '../types.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
+
+function StepActionTarget({
+  onClick,
+  children,
+}: {
+  onClick: () => void
+  children: ReactNode
+}) {
+  const geometry = useMouseGeometry()
+  const registry = useMouseRegistry()
+  const hasMeasuredMouseHost =
+    geometry !== null &&
+    geometry.origin !== null &&
+    geometry.clip !== null &&
+    registry !== null
+
+  if (!hasMeasuredMouseHost) return children
+
+  return <MeasuredStepAction onClick={onClick}>{children}</MeasuredStepAction>
+}
+
+function MeasuredStepAction({
+  onClick,
+  children,
+}: {
+  onClick: () => void
+  children: ReactNode
+}) {
+  const ref = useAutoMouseArea({ onClick })
+  return (
+    <MouseLayout ref={ref} flexDirection="row">
+      {children}
+    </MouseLayout>
+  )
+}
 
 export interface StepContext {
   /** Current step id. */
@@ -146,27 +185,33 @@ export function StepFlow({
   }
 
   return (
-    <Box flexDirection="column">
+    <MouseLayout flexDirection="column">
       <Box>
         <Text dimColor>
           [{currentStepIndex + 1}/{steps.length}] {currentStep.title}
         </Text>
       </Box>
 
-      <Box>{currentStep.component(stepContext)}</Box>
+      <MouseLayout>{currentStep.component(stepContext)}</MouseLayout>
 
-      <Box>
+      <MouseLayout>
         {isFirst ? (
-          <Text dimColor>[esc] Cancel</Text>
+          <StepActionTarget onClick={goBack}>
+            <Text dimColor>[esc] Cancel</Text>
+          </StepActionTarget>
         ) : (
-          <Text dimColor>[←] Back</Text>
+          <StepActionTarget onClick={goBack}>
+            <Text dimColor>[←] Back</Text>
+          </StepActionTarget>
         )}
         <Text> </Text>
-        <Text dimColor>
-          [→{isLast || steps.length === 0 ? '' : '/Enter'}]{' '}
-          {isLast ? 'Finish' : 'Next'}
-        </Text>
-      </Box>
-    </Box>
+        <StepActionTarget onClick={goNext}>
+          <Text dimColor>
+            [→{isLast || steps.length === 0 ? '' : '/Enter'}]{' '}
+            {isLast ? 'Finish' : 'Next'}
+          </Text>
+        </StepActionTarget>
+      </MouseLayout>
+    </MouseLayout>
   )
 }

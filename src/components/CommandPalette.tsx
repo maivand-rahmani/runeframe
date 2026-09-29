@@ -3,6 +3,10 @@ import { Box, Text } from 'ink'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import type { ActionRegistry, ActionMatch } from '../commands/ActionRegistry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
 
 export interface CommandPaletteProps {
   registry: ActionRegistry
@@ -14,6 +18,9 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const results = registry.search(query)
   const { colors } = useTheme()
+  const mouseGeometry = useMouseGeometry()
+  const mouseRegistry = useMouseRegistry()
+  const autoMouseEnabled = mouseGeometry != null && mouseRegistry != null
 
   useEffect(() => {
     setSelectedIndex(0)
@@ -78,7 +85,7 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
   )
 
   return (
-    <Box
+    <MouseLayout
       flexDirection="column"
       borderStyle="round"
       borderColor={colors.border.default}
@@ -91,10 +98,17 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
         <Text>{query}</Text>
         <Text dimColor>|</Text>
       </Box>
-      <Box flexDirection="column">
-        {renderResults(results, selectedIndex, query, colors)}
-      </Box>
-    </Box>
+      <MouseLayout flexDirection="column">
+        {renderResults(
+          results,
+          selectedIndex,
+          query,
+          colors,
+          autoMouseEnabled,
+          setSelectedIndex,
+        )}
+      </MouseLayout>
+    </MouseLayout>
   )
 }
 
@@ -103,6 +117,8 @@ function renderResults(
   selectedIndex: number,
   query: string,
   colors: ReturnType<typeof useTheme>['colors'],
+  autoMouseEnabled: boolean,
+  onSelect: (index: number) => void,
 ): ReactElement[] {
   const elements: ReactElement[] = []
   let currentCategory = ''
@@ -118,17 +134,29 @@ function renderResults(
       )
     }
 
-    const isSelected = flatIndex === selectedIndex
+    const resultIndex = flatIndex
+    const isSelected = resultIndex === selectedIndex
+    const rowKey = `${match.action.id}:${resultIndex}`
+    const rowContents = (
+      <Text
+        color={isSelected ? colors.focus.active : undefined}
+        bold={isSelected}
+      >
+        {isSelected ? '> ' : '  '}
+        {match.action.label}
+      </Text>
+    )
     elements.push(
-      <Box key={match.action.id}>
-        <Text
-          color={isSelected ? colors.focus.active : undefined}
-          bold={isSelected}
+      autoMouseEnabled ? (
+        <CommandPaletteAutoRow
+          key={rowKey}
+          onClick={() => onSelect(resultIndex)}
         >
-          {isSelected ? '> ' : '  '}
-          {match.action.label}
-        </Text>
-      </Box>,
+          {rowContents}
+        </CommandPaletteAutoRow>
+      ) : (
+        <Box key={match.action.id}>{rowContents}</Box>
+      ),
     )
     flatIndex++
   }
@@ -144,4 +172,19 @@ function renderResults(
   }
 
   return elements
+}
+
+function CommandPaletteAutoRow({
+  children,
+  onClick,
+}: {
+  children: ReactElement
+  onClick: () => void
+}) {
+  const ref = useAutoMouseArea({
+    scope: 'command',
+    priority: 80,
+    onClick,
+  })
+  return <Box ref={ref}>{children}</Box>
 }

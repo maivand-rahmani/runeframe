@@ -52,14 +52,14 @@ export function ConfirmCancel({
       id: 'confirm',
       label: confirmLabel,
       category: 'input',
-      handler: () => {},
+      handler: () => onConfirmRef.current(),
       keys: ['enter'],
     },
     {
       id: 'cancel',
       label: cancelLabel,
       category: 'input',
-      handler: () => {},
+      handler: () => onCancelRef.current(),
       keys: ['esc'],
     },
   ]

@@ -1,7 +1,10 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Box, Text } from 'ink'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useInputFocus } from '../interaction/useInputFocus.js'
+import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
 import type { FocusScope } from '../types.js'
 
 export interface SearchInputProps {
@@ -21,9 +24,18 @@ export function SearchInput({
   const [internalValue, setInternalValue] = useState('')
   const value = isControlled ? controlledValue : internalValue
   const { colors } = useTheme()
+  const inputFocus = useInputFocus()
+  const mouseRef = useAutoMouseArea({ onClick: inputFocus.focus })
+  const { suspend, restore } = useShellSuspension()
 
   const ref = useRef({ value, setInternalValue, onChange, isControlled })
   ref.current = { value, setInternalValue, onChange, isControlled }
+
+  useEffect(() => {
+    if (!inputFocus.focused) return
+    suspend()
+    return () => restore()
+  }, [inputFocus.focused, suspend, restore])
 
   useKeyHandler(
     (event) => {
@@ -48,11 +60,11 @@ export function SearchInput({
       }
     },
     scope,
-    { priority: 60 },
+    { enabled: inputFocus.focused, priority: 60 },
   )
 
   return (
-    <Box>
+    <Box ref={mouseRef}>
       {value.length > 0 ? (
         <Text>{value}</Text>
       ) : (

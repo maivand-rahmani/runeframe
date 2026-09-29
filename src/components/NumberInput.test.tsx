@@ -4,9 +4,44 @@ import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
 import { NumberInput } from './NumberInput.js'
 import type { ReactElement } from 'react'
+import stripAnsi from 'strip-ansi'
+import { FrameworkProvider } from '../FrameworkProvider.js'
+import { ScreenRegistry } from '../screens/registry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+const mouseRegistry = new ScreenRegistry()
+mouseRegistry.register({ id: 'test', title: 'Test', component: () => null })
+
+function renderInFramework(ui: ReactElement) {
+  return render(
+    <FrameworkProvider registry={mouseRegistry} defaultScreen="test">
+      {ui}
+    </FrameworkProvider>,
+  )
+}
+
+function findMarker(frame: string, marker: string): { x: number; y: number } {
+  const lines = stripAnsi(frame).split('\n')
+  for (let y = 0; y < lines.length; y++) {
+    const x = lines[y]!.indexOf(marker)
+    if (x !== -1) return { x, y }
+  }
+  throw new Error(`Marker not found: ${marker}`)
+}
+
+async function clickAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}m`)
+  await delay()
 }
 
 function delay(ms = 50) {
@@ -214,5 +249,25 @@ describe('NumberInput', () => {
     stdin.write('\x1b')
     await delay()
     expect(changes).toEqual([42])
+  })
+
+  it('routes arrow input only to the field clicked with SGR mouse input', async () => {
+    const firstChange = vi.fn()
+    const secondChange = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <NumberInput label="First" defaultValue={2} onChange={firstChange} />
+        <NumberInput label="Second" defaultValue={10} onChange={secondChange} />
+      </MouseLayout>,
+    )
+
+    await delay()
+    const second = findMarker(lastFrame() ?? '', 'Second:')
+    await clickAt(stdin, second.x, second.y)
+    stdin.write('\u001B[A')
+    await delay()
+
+    expect(firstChange).not.toHaveBeenCalled()
+    expect(secondChange).toHaveBeenCalledWith(11)
   })
 })

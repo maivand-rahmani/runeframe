@@ -1,10 +1,20 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
 import { useRegisterActions } from '../commands/ScopedActionRegistryProvider.js'
 import { InputConsumptionResult } from '../types.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
 
 // ── Data Types ──
 
@@ -29,8 +39,13 @@ export function OptionGrid({
 }: OptionGridProps) {
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
+  const mouseGeometry = useMouseGeometry()
+  const mouseRegistry = useMouseRegistry()
+  const autoMouseEnabled = mouseGeometry != null && mouseRegistry != null
   const onSelectRef = useRef(onSelect)
+  const optionsRef = useRef(options)
   onSelectRef.current = onSelect
+  optionsRef.current = options
   const safeColumns = Math.max(1, columns)
 
   const [focusIndex, setFocusIndex] = useState(() => {
@@ -40,6 +55,15 @@ export function OptionGrid({
 
   const focusIndexRef = useRef(focusIndex)
   focusIndexRef.current = focusIndex
+
+  const handleMouseSelect = (renderedOption: OptionGridOption, index: number) => {
+    const option = optionsRef.current[index]
+    if (!option || option !== renderedOption || option.disabled) return
+
+    focusIndexRef.current = index
+    setFocusIndex(index)
+    onSelectRef.current(option.value)
+  }
 
   // Find next non-disabled index
   const findNextEnabled = useCallback(
@@ -211,34 +235,68 @@ export function OptionGrid({
   }
 
   return (
-    <Box flexDirection="column">
+    <MouseLayout flexDirection="column">
       {rows.map((row, rowIdx) => (
-        <Box key={rowIdx} flexDirection="row">
+        <MouseLayout key={rowIdx} flexDirection="row">
           {row.map((opt, colIdx) => {
             const globalIdx = rowIdx * safeColumns + colIdx
             const isFocused = globalIdx === focusIndex
-            const isDisabled = opt.disabled
+            const isDisabled = Boolean(opt.disabled)
+
+            const rowKey = `${opt.value}:${globalIdx}`
+            const content = (
+              <Text
+                color={
+                  isDisabled
+                    ? colors.text.muted
+                    : isFocused
+                      ? colors.focus.active
+                      : colors.text.primary
+                }
+                bold={isFocused && !isDisabled}
+                dimColor={isDisabled}
+              >
+                {opt.label}
+              </Text>
+            )
+
+            if (autoMouseEnabled) {
+              return (
+                <OptionGridAutoCell
+                  key={rowKey}
+                  disabled={isDisabled}
+                  onClick={() => handleMouseSelect(opt, globalIdx)}
+                >
+                  {content}
+                </OptionGridAutoCell>
+              )
+            }
 
             return (
-              <Box key={globalIdx} marginRight={2}>
-                <Text
-                  color={
-                    isDisabled
-                      ? colors.text.muted
-                      : isFocused
-                        ? colors.focus.active
-                        : colors.text.primary
-                  }
-                  bold={isFocused && !isDisabled}
-                  dimColor={isDisabled}
-                >
-                  {opt.label}
-                </Text>
+              <Box key={rowKey} marginRight={2}>
+                {content}
               </Box>
             )
           })}
-        </Box>
+        </MouseLayout>
       ))}
+    </MouseLayout>
+  )
+}
+
+function OptionGridAutoCell({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: ReactNode
+  disabled: boolean
+  onClick: () => void
+}) {
+  const ref = useAutoMouseArea({ disabled, onClick })
+  return (
+    <Box ref={ref} marginRight={2}>
+      {children}
     </Box>
   )
 }

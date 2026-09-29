@@ -6,6 +6,7 @@ import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
 import { FocusTreeProvider } from '../interaction/FocusTreeProvider.js'
 import { FrameworkProvider } from '../FrameworkProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 import { List, type ListItem } from './List.js'
 import type { ReactElement } from 'react'
 
@@ -41,6 +42,26 @@ async function waitForFrame(
     frame = getFrame() ?? ''
   }
   return frame
+}
+
+function cellInFrame(frame: string | undefined, text: string) {
+  const plain = (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  const lines = plain.split(/\r?\n/)
+  const y = lines.findIndex((line) => line.includes(text))
+  if (y < 0) throw new Error(`Could not find ${JSON.stringify(text)} in frame`)
+  return { x: lines[y].indexOf(text), y }
+}
+
+async function clickCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
 }
 
 const sampleItems: ListItem[] = [
@@ -230,6 +251,87 @@ describe('List', () => {
     expect(lastFrame()).toContain('Item Beta*')
     expect(selected).toEqual(['b'])
     expect(activated).toHaveLength(0)
+  })
+
+  it('automatically hit-tests visible rows and preserves select-only click semantics', async () => {
+    const selected: string[] = []
+    const activated: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <List
+          items={sampleItems}
+          onSelect={(id) => selected.push(id)}
+          onActivate={(id) => activated.push(id)}
+          renderItem={(item, { focused }) => (
+            <Text>
+              {item.label}
+              {focused ? '*' : ''}
+            </Text>
+          )}
+        />
+      </MouseLayout>,
+    )
+
+    await delay(100)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Item Beta'))
+
+    expect(lastFrame()).toContain('Item Beta*')
+    expect(selected).toEqual(['b'])
+    expect(activated).toHaveLength(0)
+
+    stdin.write('\u001B[B')
+    await delay()
+    expect(lastFrame()).toContain('Item Gamma*')
+  })
+
+  it('keeps explicit row bounds authoritative beneath MouseLayout', async () => {
+    const selected: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <List
+          items={sampleItems}
+          onSelect={(id) => selected.push(id)}
+          mouseBoundsForItem={(item) =>
+            item.id === 'a' ? { x: 0, y: 0, width: 8, height: 1 } : undefined
+          }
+        />
+      </MouseLayout>,
+    )
+
+    await delay(100)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Item Beta'))
+    expect(selected).toEqual([])
+
+    await clickCell(stdin, { x: 0, y: 0 })
+    expect(selected).toEqual(['a'])
+  })
+
+  it('cancels an automatic row press when reordering moves another row under it', async () => {
+    const selected: string[] = []
+    const orderedItems = [sampleItems[1], sampleItems[0], sampleItems[2]]
+    const view = (items: ListItem[]) => (
+      <FrameworkProvider registry={interactionRegistry} defaultScreen="test">
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <List
+            items={items}
+            onSelect={(id) => selected.push(id)}
+            renderItem={(item) => <Text>{item.label}</Text>}
+          />
+        </MouseLayout>
+      </FrameworkProvider>
+    )
+    const { stdin, lastFrame, rerender } = render(view(sampleItems))
+
+    await delay(100)
+    const originalCell = cellInFrame(lastFrame(), 'Item Alpha')
+    stdin.write(`\u001B[<0;${originalCell.x + 1};${originalCell.y + 1}M`)
+    await delay()
+    rerender(view(orderedItems))
+    await delay(100)
+    stdin.write(`\u001B[<0;${originalCell.x + 1};${originalCell.y + 1}m`)
+    await delay()
+
+    expect(selected).toEqual([])
   })
 
   it('clips items beyond maxVisible', () => {

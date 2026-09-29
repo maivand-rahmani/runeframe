@@ -4,9 +4,45 @@ import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
 import { TextInput } from './TextInput.js'
 import type { ReactElement } from 'react'
+import stripAnsi from 'strip-ansi'
+import { FrameworkProvider } from '../FrameworkProvider.js'
+import { ScreenRegistry } from '../screens/registry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { ModalDialog } from './ModalDialog.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+const mouseRegistry = new ScreenRegistry()
+mouseRegistry.register({ id: 'test', title: 'Test', component: () => null })
+
+function renderInFramework(ui: ReactElement) {
+  return render(
+    <FrameworkProvider registry={mouseRegistry} defaultScreen="test">
+      {ui}
+    </FrameworkProvider>,
+  )
+}
+
+function findMarker(frame: string, marker: string): { x: number; y: number } {
+  const lines = stripAnsi(frame).split('\n')
+  for (let y = 0; y < lines.length; y++) {
+    const x = lines[y]!.indexOf(marker)
+    if (x !== -1) return { x, y }
+  }
+  throw new Error(`Marker not found: ${marker}`)
+}
+
+async function clickAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}m`)
+  await delay()
 }
 
 function delay(ms = 50) {
@@ -226,5 +262,52 @@ describe('TextInput', () => {
     await typeChars(stdin, 'abcd')
     expect(lastFrame()).toContain('abc')
     expect(lastFrame()).not.toContain('abcd')
+  })
+
+  it('moves keyboard focus to the clicked field and transfers input between fields', async () => {
+    const firstChange = vi.fn()
+    const secondChange = vi.fn()
+    const secondSubmit = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <TextInput placeholder="first field" onChange={firstChange} />
+        <TextInput
+          placeholder="second field"
+          onChange={secondChange}
+          onSubmit={secondSubmit}
+        />
+      </MouseLayout>,
+    )
+
+    await delay()
+    const second = findMarker(lastFrame() ?? '', 'second field')
+    await clickAt(stdin, second.x, second.y)
+    stdin.write('x')
+    await delay()
+    stdin.write('\r')
+    await delay()
+
+    expect(firstChange).not.toHaveBeenCalled()
+    expect(secondChange).toHaveBeenCalledWith('x')
+    expect(secondSubmit).toHaveBeenCalledWith('x')
+  })
+
+  it('hit-tests through ModalDialog measured ancestors', async () => {
+    const onChange = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <ModalDialog title="Edit" onClose={() => {}}>
+          <TextInput placeholder="nested field" onChange={onChange} />
+        </ModalDialog>
+      </MouseLayout>,
+    )
+
+    await delay()
+    const field = findMarker(lastFrame() ?? '', 'nested field')
+    await clickAt(stdin, field.x, field.y)
+    stdin.write('x')
+    await delay()
+
+    expect(onChange).toHaveBeenCalledWith('x')
   })
 })

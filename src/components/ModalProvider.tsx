@@ -1,9 +1,10 @@
 import { useRef, useCallback, useEffect, type ReactNode } from 'react'
-import { Box, Text } from 'ink'
+import { Text } from 'ink'
 import { useNavigation } from '../navigation/NavigationProvider.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useKeyboardScope } from '../interaction/KeyboardScopeProvider.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 
 export interface ModalProviderProps {
   children: ReactNode
@@ -53,12 +54,12 @@ export function ModalProvider({ children, onClose }: ModalProviderProps) {
   }
 
   return (
-    <Box flexDirection="column" width="100%">
-      <Box>
+    <MouseLayout flexDirection="column" width="100%">
+      <MouseLayout>
         <Text dimColor>{'  '}</Text>
-      </Box>
-      <Box flexDirection="column" alignItems="center" justifyContent="center">
-        <Box
+      </MouseLayout>
+      <MouseLayout flexDirection="column" alignItems="center" justifyContent="center">
+        <MouseLayout
           borderStyle="round"
           borderColor={colors.focus.ring}
           paddingX={1}
@@ -69,17 +70,17 @@ export function ModalProvider({ children, onClose }: ModalProviderProps) {
             modalProps: currentModalProps,
             closeModal: popModal,
           })}
-        </Box>
-      </Box>
+        </MouseLayout>
+      </MouseLayout>
       {modalStack.length > 1 && (
-        <Box>
+        <MouseLayout>
           <Text dimColor>
             {modalStack.length - 1} more modal
             {modalStack.length > 2 ? 's' : ''}
           </Text>
-        </Box>
+        </MouseLayout>
       )}
-    </Box>
+    </MouseLayout>
   )
 }
 

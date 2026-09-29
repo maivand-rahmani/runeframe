@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import type { ReactElement } from 'react'
+import stripAnsi from 'strip-ansi'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { ScreenRegistry } from '../screens/registry.js'
 import { ConfirmCancel } from './ConfirmCancel.js'
 
 function renderInTheme(ui: ReactElement) {
@@ -11,6 +15,26 @@ function renderInTheme(ui: ReactElement) {
 
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+function findMarker(frame: string, marker: string): { x: number; y: number } {
+  const lines = stripAnsi(frame).split('\n')
+  for (let y = 0; y < lines.length; y++) {
+    const x = lines[y]!.indexOf(marker)
+    if (x !== -1) return { x, y }
+  }
+  throw new Error(`Marker not found: ${marker}`)
+}
+
+async function clickAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}m`)
+  await delay()
 }
 
 describe('ConfirmCancel', () => {
@@ -110,6 +134,43 @@ describe('ConfirmCancel', () => {
 
     expect(onCancel).toHaveBeenCalledTimes(1)
     expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('routes footer mouse clicks through the same confirm and cancel callbacks', async () => {
+    const onConfirm = vi.fn()
+    const onCancel = vi.fn()
+    const registry = new ScreenRegistry()
+    registry.register({
+      id: 'home',
+      title: 'Home',
+      component: () => null,
+    })
+
+    const { stdin, lastFrame } = render(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <FrameworkProvider registry={registry} defaultScreen="home">
+          <ConfirmCancel
+            title="Delete entry?"
+            message="Are you sure?"
+            confirmLabel="Remove"
+            cancelLabel="Keep"
+            onConfirm={onConfirm}
+            onCancel={onCancel}
+          />
+        </FrameworkProvider>
+      </MouseLayout>,
+    )
+
+    await delay()
+    let marker = findMarker(lastFrame() ?? '', 'Remove')
+    await clickAt(stdin, marker.x, marker.y)
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onCancel).not.toHaveBeenCalled()
+
+    marker = findMarker(lastFrame() ?? '', 'Keep')
+    await clickAt(stdin, marker.x, marker.y)
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
   it('renders danger variant', () => {

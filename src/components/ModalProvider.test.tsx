@@ -1,14 +1,17 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Text } from 'ink'
 import type { ReactElement } from 'react'
+import stripAnsi from 'strip-ansi'
 import { ThemeProvider } from '../design-system/ThemeProvider.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
 import {
   NavigationProvider,
   useNavigation,
 } from '../navigation/NavigationProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 import { ModalProvider } from './ModalProvider.js'
 import { ConfirmModal } from './ConfirmModal.js'
 import { InfoModal } from './InfoModal.js'
@@ -58,6 +61,26 @@ function renderInTheme(ui: ReactElement) {
 
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+function findMarker(frame: string, marker: string): { x: number; y: number } {
+  const lines = stripAnsi(frame).split('\n')
+  for (let y = 0; y < lines.length; y++) {
+    const x = lines[y]!.indexOf(marker)
+    if (x !== -1) return { x, y }
+  }
+  throw new Error(`Marker not found: ${marker}`)
+}
+
+async function clickAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}m`)
+  await delay()
 }
 
 describe('ModalProvider', () => {
@@ -211,6 +234,22 @@ describe('ConfirmModal', () => {
     expect(frame).toContain('[Yes]')
     expect(frame).toContain('[No]')
   })
+
+  it('keeps its original Text output without measured mouse geometry', () => {
+    const { lastFrame } = renderInTheme(
+      <ConfirmModal
+        title="Question"
+        message="Ready?"
+        confirmLabel="Yes"
+        cancelLabel="No"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    expect(stripAnsi(lastFrame() ?? '').trimEnd()).toBe(
+      'Question\nReady?\n[Yes] / [No]',
+    )
+  })
 })
 
 describe('InfoModal', () => {
@@ -257,5 +296,120 @@ describe('InfoModal', () => {
       />,
     )
     expect(lastFrame()).toContain('[OK]')
+  })
+
+  it('keeps its original Text output without measured mouse geometry', () => {
+    const { lastFrame } = renderInTheme(
+      <InfoModal
+        title="Success"
+        message="All done"
+        details="3 items updated"
+        dismissLabel="Got it"
+        onDismiss={() => {}}
+      />,
+    )
+    expect(stripAnsi(lastFrame() ?? '').trimEnd()).toBe(
+      'Success\nAll done\n3 items updated\n[Got it] — Press Enter or Escape',
+    )
+  })
+
+  it('hits confirm and cancel labels through an externally anchored modal host', async () => {
+    const onConfirm = vi.fn()
+    const onCancel = vi.fn()
+    const modalRegistry = new ScreenRegistry()
+    modalRegistry.register({
+      id: 'home',
+      title: 'Home',
+      component: () => <Text>Home</Text>,
+    })
+    modalRegistry.register({
+      id: 'confirm',
+      title: 'Confirm',
+      category: 'system',
+      component: () => (
+        <ConfirmModal
+          title="Decision"
+          message="Continue?"
+          confirmLabel="Approve"
+          cancelLabel="Reject"
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />
+      ),
+    })
+
+    let nav: ReturnType<typeof useNavigation> | null = null
+    function NavigationCapture() {
+      nav = useNavigation()
+      return null
+    }
+
+    const { stdin, lastFrame } = render(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <FrameworkProvider registry={modalRegistry} defaultScreen="home">
+          <NavigationCapture />
+        </FrameworkProvider>
+      </MouseLayout>,
+    )
+
+    nav!.pushModal('confirm')
+    await delay()
+    let frame = lastFrame() ?? ''
+    await clickAt(
+      stdin,
+      findMarker(frame, '[Approve]').x + 1,
+      findMarker(frame, '[Approve]').y,
+    )
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onCancel).not.toHaveBeenCalled()
+
+    frame = lastFrame() ?? ''
+    const reject = findMarker(frame, '[Reject]')
+    await clickAt(stdin, reject.x + 1, reject.y)
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('hits the InfoModal dismiss label through an externally anchored modal host', async () => {
+    const onDismiss = vi.fn()
+    const modalRegistry = new ScreenRegistry()
+    modalRegistry.register({
+      id: 'home',
+      title: 'Home',
+      component: () => <Text>Home</Text>,
+    })
+    modalRegistry.register({
+      id: 'info',
+      title: 'Info',
+      category: 'system',
+      component: () => (
+        <InfoModal
+          title="Finished"
+          message="Saved"
+          dismissLabel="Got it"
+          onDismiss={onDismiss}
+        />
+      ),
+    })
+
+    let nav: ReturnType<typeof useNavigation> | null = null
+    function NavigationCapture() {
+      nav = useNavigation()
+      return null
+    }
+
+    const { stdin, lastFrame } = render(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <FrameworkProvider registry={modalRegistry} defaultScreen="home">
+          <NavigationCapture />
+        </FrameworkProvider>
+      </MouseLayout>,
+    )
+
+    nav!.pushModal('info')
+    await delay()
+    const dismiss = findMarker(lastFrame() ?? '', '[Got it]')
+    await clickAt(stdin, dismiss.x + 1, dismiss.y)
+    expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 })

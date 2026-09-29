@@ -13,6 +13,10 @@ import { InputConsumptionResult } from '../types.js'
 import { useNavigation } from '../navigation/NavigationProvider.js'
 import { MouseArea } from '../interaction/MouseArea.js'
 import type { MouseBounds } from '../interaction/MouseArea.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
 
 export interface SidebarItem {
   id: string
@@ -42,17 +46,21 @@ function SidebarEntry({
   showDescription,
   groupActive,
   mouseBounds,
+  autoMouseEnabled,
   onMouseActivate,
+  onAutoMouseActivate,
 }: {
   item: SidebarItem
   active: boolean
   showDescription: boolean
   groupActive: boolean
   mouseBounds?: MouseBounds
+  autoMouseEnabled: boolean
   onMouseActivate?: (
     focusItem: () => void,
     renderedBounds: MouseBounds,
   ) => void
+  onAutoMouseActivate?: (focusItem: () => void) => void
 }) {
   const theme = useTheme()
   const { focused, onActivate } = useFocusable({ id: item.id })
@@ -76,26 +84,62 @@ function SidebarEntry({
       ? theme.colors.focus.active
       : theme.colors.text.muted
 
-  const row = (
-    <Box flexDirection="column" marginTop={theme.spacing.xs}>
+  const rowContents = (
+    <>
       <Text color={labelColor} bold={active || (focused && groupActive)}>
         {marker} {item.label}
       </Text>
       {showDescription && item.description != null && item.description.length > 0 && (
         <Text color={theme.colors.text.secondary}>  {item.description}</Text>
       )}
-    </Box>
+    </>
   )
 
-  if (mouseBounds == null) return row
+  if (mouseBounds != null) {
+    return (
+      <MouseArea
+        bounds={mouseBounds}
+        onClick={() => onMouseActivate?.(onActivate, mouseBounds)}
+      >
+        <Box flexDirection="column" marginTop={theme.spacing.xs}>
+          {rowContents}
+        </Box>
+      </MouseArea>
+    )
+  }
+
+  if (autoMouseEnabled) {
+    return (
+      <SidebarAutoRow
+        marginTop={theme.spacing.xs}
+        onClick={() => onAutoMouseActivate?.(onActivate)}
+      >
+        {rowContents}
+      </SidebarAutoRow>
+    )
+  }
 
   return (
-    <MouseArea
-      bounds={mouseBounds}
-      onClick={() => onMouseActivate?.(onActivate, mouseBounds)}
-    >
-      {row}
-    </MouseArea>
+    <Box flexDirection="column" marginTop={theme.spacing.xs}>
+      {rowContents}
+    </Box>
+  )
+}
+
+function SidebarAutoRow({
+  children,
+  marginTop,
+  onClick,
+}: {
+  children: ReactNode
+  marginTop: number
+  onClick: () => void
+}) {
+  const ref = useAutoMouseArea({ onClick })
+  return (
+    <Box ref={ref} flexDirection="column" marginTop={marginTop}>
+      {children}
+    </Box>
   )
 }
 
@@ -112,6 +156,8 @@ export function Sidebar({
   const columns = columnsOverride ?? detectedColumns ?? LAYOUT.medium
   const theme = useTheme()
   const { currentScreenId, push } = useNavigation()
+  const mouseGeometry = useMouseGeometry()
+  const mouseRegistry = useMouseRegistry()
   const hasActiveItem = items.some((item) => item.id === currentScreenId)
   const zoneId = useId()
   const { ZoneProvider } = useFocusZone(zoneId, {
@@ -144,6 +190,10 @@ export function Sidebar({
   itemsRef.current = items
   const mouseBoundsForItemRef = useRef(mouseBoundsForItem)
   mouseBoundsForItemRef.current = mouseBoundsForItem
+  const autoMouseEnabled =
+    mouseBoundsForItem == null &&
+    mouseGeometry != null &&
+    mouseRegistry != null
   const activateGroupRef = useRef<() => void>(() => {})
   activateGroupRef.current = groupActivate
 
@@ -156,20 +206,22 @@ export function Sidebar({
   function handleMouseActivate(
     id: string,
     focusItem: () => void,
-    renderedBounds: MouseBounds,
+    renderedBounds?: MouseBounds,
   ) {
     const index = itemsRef.current.findIndex((item) => item.id === id)
     if (index < 0) return
     const item = itemsRef.current[index]
     const resolver = mouseBoundsForItemRef.current
-    const currentBounds = resolver?.(item, index)
-    // Do not honor a stale row callback after it has been removed or lost its
-    // explicit geometry.
-    if (
-      currentBounds == null ||
-      !sameMouseBounds(currentBounds, renderedBounds)
-    ) {
-      return
+    if (renderedBounds != null) {
+      const currentBounds = resolver?.(item, index)
+      // Do not honor a stale row callback after it has been removed or lost its
+      // explicit geometry.
+      if (
+        currentBounds == null ||
+        !sameMouseBounds(currentBounds, renderedBounds)
+      ) {
+        return
+      }
     }
 
     activateGroupRef.current()
@@ -231,10 +283,10 @@ export function Sidebar({
   return (
     <ZoneProvider>
       <GroupProvider>
-        <Box flexDirection="column">
+        <MouseLayout flexDirection="column">
           {visibleGroups.map(({ category, items: categoryItems }, categoryIndex) => {
             return (
-              <Box
+              <MouseLayout
                 key={category}
                 flexDirection="column"
                 marginBottom={
@@ -251,6 +303,7 @@ export function Sidebar({
                     active={item.id === currentScreenId}
                     showDescription={showDescriptions}
                     groupActive={groupActive}
+                    autoMouseEnabled={autoMouseEnabled}
                     mouseBounds={mouseBoundsForItem?.(
                       item,
                       inputOrder.get(item.id) ?? -1,
@@ -258,13 +311,18 @@ export function Sidebar({
                     onMouseActivate={(focusItem, renderedBounds) =>
                       handleMouseActivate(item.id, focusItem, renderedBounds)
                     }
+                    onAutoMouseActivate={(focusItem) =>
+                      handleMouseActivate(item.id, focusItem)
+                    }
                   />
                 ))}
-              </Box>
+              </MouseLayout>
             )
           })}
-          {footer != null && <Box marginTop={theme.spacing.sm}>{footer}</Box>}
-        </Box>
+          {footer != null && (
+            <MouseLayout marginTop={theme.spacing.sm}>{footer}</MouseLayout>
+          )}
+        </MouseLayout>
       </GroupProvider>
     </ZoneProvider>
   )

@@ -62,7 +62,19 @@ interface RegisteredArea {
 }
 
 interface PendingPress {
-  areaId: number | null
+  /**
+   * Resolved press target entry, or `null` when the press hit no area. Stored
+   * by entry identity: deleting or re-registering an area (even at the same
+   * id and bounds) produces a different entry and cancels the press.
+   */
+  entry: RegisteredArea | null
+  /** Whether the resolved target was disabled when the press happened. */
+  disabled: boolean
+  /**
+   * Modal stack identity at press. Any modal change while the button is held
+   * (open, close, or open+close) cancels activation.
+   */
+  modalStack: readonly unknown[]
 }
 
 /** Internal registry contract consumed by `MouseArea`. */
@@ -140,8 +152,15 @@ function writeMouseReset(stdout: NodeJS.WriteStream): void {
  * - Among eligible overlaps the highest explicit `priority` wins; ties go to
  *   the most recent registration. A disabled topmost target consumes without
  *   activating anything.
- * - A click fires only when press and release resolve to the same still
- *   registered area. Unregistering the press target cancels the pending press.
+ * - A click fires only when press and release resolve to the same registered
+ *   entry under unchanged routing: the modal stack must be identical to press
+ *   time, the target must still be resolved at the release point, and it must
+ *   not have been disabled at press nor be disabled at release. Deleting,
+ *   re-registering (new entry, even for the same id and bounds), reordering,
+ *   disabling or a scope change that reroutes the point between press and
+ *   release cancels the stale activation; release alone never activates a
+ *   target that was not pressed. Unregistering the press target cancels the
+ *   pending press immediately.
  * - Only left press/release dispatch; all other valid SGR reports are
  *   consumed silently.
  *
@@ -153,12 +172,14 @@ function writeMouseReset(stdout: NodeJS.WriteStream): void {
 export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps) {
   const { registerInputInterceptor, dispatchInputEvent, isScopeActive } =
     useKeyboardScope()
-  const { isModalOpen } = useNavigation()
+  const { isModalOpen, modalStack } = useNavigation()
   const { stdin, isRawModeSupported } = useStdin()
   const { stdout, write } = useStdout()
 
   const modalOpenRef = useRef(isModalOpen)
   modalOpenRef.current = isModalOpen
+  const modalStackRef = useRef(modalStack)
+  modalStackRef.current = modalStack
 
   const parserRef = useRef<MouseInputParser | null>(null)
   if (parserRef.current === null) {
@@ -187,7 +208,7 @@ export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps)
       const current = areasRef.current.get(area.id)
       if (!current || current.area !== area) return
       areasRef.current.delete(area.id)
-      if (pendingPressRef.current?.areaId === area.id) {
+      if (pendingPressRef.current?.entry?.area.id === area.id) {
         pendingPressRef.current = null
       }
     }
@@ -244,16 +265,29 @@ export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps)
 
       if (isPress) {
         const target = findTarget(packet.x, packet.y)
-        pendingPressRef.current = { areaId: target?.area.id ?? null }
+        pendingPressRef.current = {
+          entry: target,
+          disabled: target?.area.disabled ?? false,
+          modalStack: modalStackRef.current,
+        }
         return
       }
 
       const pending = pendingPressRef.current
       pendingPressRef.current = null
-      if (!pending || pending.areaId === null) return
+      if (!pending || pending.entry === null) return
+      // Modal routing must be unchanged for the whole gesture: a modal
+      // opening/closing between press and release (even an open+close cycle)
+      // cancels the stale activation.
+      if (modalStackRef.current !== pending.modalStack) return
       const target = findTarget(packet.x, packet.y)
-      if (!target || target.area.id !== pending.areaId) return
-      if (target.area.disabled) return
+      // Deletion, re-registration, reordering, a scope change that reroutes
+      // the point and any other eligibility change all alter (or clear) the
+      // resolved entry, so a stale target can never activate on release.
+      if (target !== pending.entry) return
+      // A target disabled at press, or disabled by release time, consumes the
+      // gesture but must not activate.
+      if (pending.disabled || target.area.disabled) return
       target.area.onClick?.({ x: packet.x, y: packet.y })
     },
     [findTarget],

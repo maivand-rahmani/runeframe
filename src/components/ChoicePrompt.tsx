@@ -1,10 +1,21 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
 import { useRegisterActions } from '../commands/ScopedActionRegistryProvider.js'
 import { InputConsumptionResult } from '../types.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
 
 // ── Data Types ──
 
@@ -40,14 +51,38 @@ export function ChoicePrompt<T>({
 }: ChoicePromptProps<T>) {
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
+  const mouseGeometry = useMouseGeometry()
+  const mouseRegistry = useMouseRegistry()
+  const autoMouseEnabled = mouseGeometry != null && mouseRegistry != null
   const [activeIndex, setActiveIndex] = useState(0)
   const onSelectRef = useRef(onSelect)
   const onCancelRef = useRef(onCancel)
   const activeIndexRef = useRef(activeIndex)
+  const itemsRef = useRef(items)
+  const mouseItemIdsRef = useRef({ ids: new WeakMap<object, number>(), nextId: 0 })
 
   onSelectRef.current = onSelect
   onCancelRef.current = onCancel
   activeIndexRef.current = activeIndex
+  itemsRef.current = items
+
+  function getMouseRowKey(item: ChoiceItem<T>, index: number) {
+    let id = mouseItemIdsRef.current.ids.get(item)
+    if (id === undefined) {
+      id = mouseItemIdsRef.current.nextId++
+      mouseItemIdsRef.current.ids.set(item, id)
+    }
+    return `${id}:${index}`
+  }
+
+  function handleMouseSelect(item: ChoiceItem<T>, index: number) {
+    const currentItem = itemsRef.current[index]
+    if (currentItem !== item || currentItem.disabled) return
+
+    activeIndexRef.current = index
+    setActiveIndex(index)
+    onSelectRef.current(currentItem)
+  }
 
   // Assign letter keys (a, b, c, …) to each item, wrapping at 26
   const keyedItems = useMemo(
@@ -189,7 +224,7 @@ export function ChoicePrompt<T>({
   }
 
   return (
-    <Box flexDirection="column">
+    <MouseLayout flexDirection="column">
       {label && (
         <Box marginBottom={1}>
           <Text bold color={colors.text.primary}>
@@ -200,10 +235,12 @@ export function ChoicePrompt<T>({
 
       {keyedItems.map((item, idx) => {
         const isActive = idx === activeIndex
-        const isDisabled = item.disabled
+        const isDisabled = Boolean(item.disabled)
+        const sourceItem = items[idx]
+        const rowKey = getMouseRowKey(sourceItem, idx)
 
-        return (
-          <Box key={idx} flexDirection="column">
+        const rowContents = (
+          <>
             <Box>
               <Text
                 color={
@@ -240,9 +277,44 @@ export function ChoicePrompt<T>({
                 </Text>
               </Box>
             )}
+          </>
+        )
+
+        if (autoMouseEnabled) {
+          return (
+            <ChoicePromptAutoRow
+              key={rowKey}
+              disabled={isDisabled}
+              onClick={() => handleMouseSelect(sourceItem, idx)}
+            >
+              {rowContents}
+            </ChoicePromptAutoRow>
+          )
+        }
+
+        return (
+          <Box key={rowKey} flexDirection="column">
+            {rowContents}
           </Box>
         )
       })}
+    </MouseLayout>
+  )
+}
+
+function ChoicePromptAutoRow({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: ReactNode
+  disabled: boolean
+  onClick: () => void
+}) {
+  const ref = useAutoMouseArea({ disabled, onClick })
+  return (
+    <Box ref={ref} flexDirection="column">
+      {children}
     </Box>
   )
 }

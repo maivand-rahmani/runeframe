@@ -5,6 +5,7 @@ import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
 import { FrameworkProvider } from '../FrameworkProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 import { SelectableList } from './SelectableList.js'
 import type { ReactElement } from 'react'
 import type { ListItem } from './List.js'
@@ -26,6 +27,34 @@ function renderInFramework(ui: ReactElement) {
 
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+function cellInFrame(frame: string | undefined, text: string) {
+  const plain = (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  const lines = plain.split(/\r?\n/)
+  const y = lines.findIndex((line) => line.includes(text))
+  if (y < 0) throw new Error(`Could not find ${JSON.stringify(text)} in frame`)
+  return { x: lines[y].indexOf(text), y }
+}
+
+async function clickCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+async function wheelCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<65;${cell.x + 1};${cell.y + 1}M`)
+  await delay()
 }
 
 const sampleItems: ListItem[] = [
@@ -178,5 +207,61 @@ describe('SelectableList', () => {
     await delay()
 
     expect(selected).toEqual(['b'])
+  })
+
+  it('automatically hit-tests only the filtered visible rows', async () => {
+    const selected: string[] = []
+    const activated: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <SelectableList
+          items={sampleItems}
+          filterQuery="Banana"
+          onSelect={(id) => selected.push(id)}
+          onActivate={(id) => activated.push(id)}
+        />
+      </MouseLayout>,
+    )
+
+    await delay(120)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Banana'))
+    expect(selected).toEqual(['b'])
+
+    stdin.write('\r')
+    await delay()
+    expect(activated).toEqual(['b'])
+  })
+
+  it('inherits List wheel scrolling without changing selection or activation', async () => {
+    const items: ListItem[] = Array.from({ length: 4 }, (_, index) => ({
+      id: `selectable-${index}`,
+      label: `Selectable ${index}`,
+    }))
+    const selected: string[] = []
+    const activated: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout
+        origin={{ x: 0, y: 0 }}
+        width={40}
+        height={10}
+        flexDirection="column"
+      >
+        <SelectableList
+          items={items}
+          maxVisible={2}
+          onSelect={(id) => selected.push(id)}
+          onActivate={(id) => activated.push(id)}
+        />
+      </MouseLayout>,
+    )
+    await delay(120)
+
+    const firstCell = cellInFrame(lastFrame(), 'Selectable 0')
+    await wheelCell(stdin, firstCell)
+    expect(lastFrame()).not.toContain('Selectable 0')
+    expect(lastFrame()).toContain('Selectable 1')
+    expect(lastFrame()).toContain('Selectable 2')
+    expect(selected).toEqual([])
+    expect(activated).toEqual([])
   })
 })

@@ -1,10 +1,23 @@
-import { useState, useCallback, useId, useRef, type ReactNode } from 'react'
-import { Box, useWindowSize } from 'ink'
+import {
+  useState,
+  useCallback,
+  useId,
+  useRef,
+  useLayoutEffect,
+  type ReactNode,
+} from 'react'
+import {
+  useBoxMetrics,
+  useWindowSize,
+  type DOMElement,
+} from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { LAYOUT } from '../constants.js'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useFocusZone } from '../interaction/FocusTreeProvider.js'
 import { InputConsumptionResult } from '../types.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { MouseScrollLayout } from '../interaction/MouseScrollLayout.js'
 
 export interface AppShellProps {
   /** Optional top bar (app name, screen title, date) */
@@ -62,19 +75,50 @@ export function AppShell({
   const [scrollOffset, setScrollOffset] = useState(0)
   const scrollOffsetRef = useRef(scrollOffset)
   scrollOffsetRef.current = scrollOffset
-
-  // Maximum scroll offset is capped at a reasonable ceiling for the MVP.
-  // In a full implementation, this would be derived from measured content height.
-  const MAX_SCROLL = 200
+  const [contentMetrics, setContentMetrics] = useState({
+    height: 0,
+    hasMeasured: false,
+  })
+  const viewportRef = useRef<DOMElement | null>(null)
+  const viewportMetrics = useBoxMetrics(viewportRef)
+  const maxScrollOffset =
+    isScrollable &&
+    contentMetrics.hasMeasured &&
+    viewportMetrics.hasMeasured
+      ? Math.max(0, contentMetrics.height - viewportMetrics.height)
+      : 0
+  const maxScrollOffsetRef = useRef(maxScrollOffset)
+  maxScrollOffsetRef.current = maxScrollOffset
   const scrollStep = 1
 
-  const scrollUp = useCallback(() => {
-    setScrollOffset((prev) => Math.max(0, prev - scrollStep))
+  useLayoutEffect(() => {
+    const clamped = Math.min(scrollOffsetRef.current, maxScrollOffset)
+    if (clamped !== scrollOffsetRef.current) {
+      scrollOffsetRef.current = clamped
+      setScrollOffset(clamped)
+    }
+  }, [maxScrollOffset])
+
+  const scrollBy = useCallback((delta: number): boolean => {
+    const current = scrollOffsetRef.current
+    const next = Math.max(
+      0,
+      Math.min(maxScrollOffsetRef.current, current + delta),
+    )
+    if (next === current) return false
+    // Keep same-frame wheel reports from applying multiple stale state updates.
+    scrollOffsetRef.current = next
+    setScrollOffset(next)
+    return true
   }, [])
 
+  const scrollUp = useCallback(() => {
+    scrollBy(-scrollStep)
+  }, [scrollBy])
+
   const scrollDown = useCallback(() => {
-    setScrollOffset((prev) => Math.min(MAX_SCROLL, prev + scrollStep))
-  }, [])
+    scrollBy(scrollStep)
+  }, [scrollBy])
 
   // Keyboard scroll controls — only active in scrollable mode
   // Registered at 'navigation' scope so deeper-scope widgets consume arrows first.
@@ -99,77 +143,124 @@ export function AppShell({
   // and wraps content in a viewport-height container.
   if (isFixedSidebar) {
     return (
-      <Box flexDirection="column">
+      <MouseLayout flexDirection="column">
         {topBar != null && (
-          <Box marginBottom={theme.spacing.sm}>{topBar}</Box>
+          <MouseLayout marginBottom={theme.spacing.sm}>{topBar}</MouseLayout>
         )}
 
-        <Box flexDirection="row" flexGrow={1}>
+        <MouseLayout flexDirection="row" flexGrow={1}>
           {showSidebar && (
-            <Box position="absolute" width={SIDEBAR_WIDTH} top={0} left={0}>
+            <MouseLayout
+              position="absolute"
+              width={SIDEBAR_WIDTH}
+              top={0}
+              left={0}
+            >
               {sidebar}
-            </Box>
+            </MouseLayout>
           )}
-          <Box
-            flexGrow={1}
-            marginLeft={showSidebar ? SIDEBAR_WIDTH : 0}
-            {...(isScrollable
-              ? { height: viewportHeight, overflow: 'hidden' as const }
-              : {})}
-          >
-            <ContentZoneProvider>
-              {isScrollable ? (
-                <Box marginTop={-scrollOffset}>{children}</Box>
-              ) : (
-                children
-              )}
-            </ContentZoneProvider>
-          </Box>
-        </Box>
+          {isScrollable ? (
+            <MouseScrollLayout
+              ref={viewportRef}
+              flexGrow={1}
+              marginLeft={showSidebar ? SIDEBAR_WIDTH : 0}
+              height={viewportHeight}
+              overflow="hidden"
+              onWheel={(direction) =>
+                scrollBy(direction === 'down' ? scrollStep : -scrollStep)
+              }
+            >
+              <ContentZoneProvider>
+                <MeasuredMouseLayout
+                  marginTop={-scrollOffset}
+                  onMetrics={setContentMetrics}
+                >
+                  {children}
+                </MeasuredMouseLayout>
+              </ContentZoneProvider>
+            </MouseScrollLayout>
+          ) : (
+            <MouseLayout
+              flexGrow={1}
+              marginLeft={showSidebar ? SIDEBAR_WIDTH : 0}
+            >
+              <ContentZoneProvider>{children}</ContentZoneProvider>
+            </MouseLayout>
+          )}
+        </MouseLayout>
 
         {statusBar != null && (
-          <Box
+          <MouseLayout
             marginTop={theme.spacing.sm}
             borderStyle="single"
             borderColor={theme.colors.border.default}
           >
             {statusBar}
-          </Box>
+          </MouseLayout>
         )}
-      </Box>
+      </MouseLayout>
     )
   }
 
   // Legacy flex layout (default)
   return (
-    <Box flexDirection="column">
+    <MouseLayout flexDirection="column">
       {topBar != null && (
-        <Box marginBottom={theme.spacing.sm}>{topBar}</Box>
+        <MouseLayout marginBottom={theme.spacing.sm}>{topBar}</MouseLayout>
       )}
 
-      <Box
+      <MouseLayout
         flexDirection={isWide ? 'row' : 'column'}
         gap={isWide ? theme.spacing.xs : 0}
       >
         {showSidebar && (
-          <Box width={isWide ? SIDEBAR_WIDTH : undefined} flexShrink={0}>
+          <MouseLayout width={isWide ? SIDEBAR_WIDTH : undefined} flexShrink={0}>
             {sidebar}
-          </Box>
+          </MouseLayout>
         )}
-        <Box flexGrow={1} flexShrink={isWide ? 1 : 0}>
+        <MouseLayout flexGrow={1} flexShrink={isWide ? 1 : 0}>
           <ContentZoneProvider>{children}</ContentZoneProvider>
-        </Box>
-      </Box>
+        </MouseLayout>
+      </MouseLayout>
 
       {statusBar != null && (
-        <Box
+        <MouseLayout
           marginTop={theme.spacing.sm}
           borderStyle="single"
           borderColor={theme.colors.border.default}
         >
           {statusBar}
-        </Box>
+        </MouseLayout>
       )}
-    </Box>
+    </MouseLayout>
+  )
+}
+
+function MeasuredMouseLayout({
+  children,
+  marginTop,
+  onMetrics,
+}: {
+  children: ReactNode
+  marginTop: number
+  onMetrics: (metrics: { height: number; hasMeasured: boolean }) => void
+}) {
+  const ref = useRef<DOMElement | null>(null)
+  const metrics = useBoxMetrics(ref)
+
+  useLayoutEffect(() => {
+    onMetrics({ height: metrics.height, hasMeasured: metrics.hasMeasured })
+  }, [metrics.height, metrics.hasMeasured, onMetrics])
+
+  // Avoid cross-axis stretching to the viewport: the viewport clips this box,
+  // while its natural height supplies the full content extent for clamping.
+  return (
+    <MouseLayout
+      ref={ref}
+      alignSelf="flex-start"
+      marginTop={marginTop}
+    >
+      {children}
+    </MouseLayout>
   )
 }

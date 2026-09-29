@@ -498,6 +498,74 @@ export function useFocusable(
   }
 }
 
+// ── Input Focus Bridge ──
+
+/**
+ * Internal focus state shared by editable controls (text, number, search and
+ * command inputs). `null` outside `FocusTreeProvider`; `useInputFocus` then
+ * keeps the legacy solitary-control behavior for lightweight standalone use.
+ */
+export interface InputFocusContextValue {
+  /** The single keyboard-enabled editable control, or `null` when none. */
+  activeId: string | null
+  /**
+   * Register an editable control. The first registration receives default
+   * focus. Returns an idempotent unregister that hands focus to the first
+   * remaining registration when the active control leaves.
+   */
+  registerInput: (id: string) => () => void
+  /** Make one editable control the sole keyboard-enabled field. */
+  focusInput: (id: string) => void
+}
+
+export const InputFocusContext =
+  createContext<InputFocusContextValue | null>(null)
+
+/**
+ * Owns the shared editable-control focus leaf. Exactly one registered control
+ * at a time is keyboard-enabled: the first registration receives default focus
+ * (preserving single-field typing without clicks), `focusInput` moves the leaf,
+ * and unregistering the active control selects the first remaining registered
+ * field or no leaf at all. Unregistering an inactive control never moves focus.
+ */
+function InputFocusBridge({ children }: { children: ReactNode }) {
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const inputIdsRef = useRef<string[]>([])
+
+  const registerInput = useCallback((id: string) => {
+    if (!inputIdsRef.current.includes(id)) {
+      inputIdsRef.current = [...inputIdsRef.current, id]
+    }
+    // First registration wins default focus; later registrations never steal
+    // focus from the current active leaf.
+    setActiveId((current) => current ?? id)
+
+    return () => {
+      inputIdsRef.current = inputIdsRef.current.filter(
+        (candidate) => candidate !== id,
+      )
+      setActiveId((current) =>
+        current === id ? (inputIdsRef.current[0] ?? null) : current,
+      )
+    }
+  }, [])
+
+  const focusInput = useCallback((id: string) => {
+    setActiveId(id)
+  }, [])
+
+  const value = useMemo<InputFocusContextValue>(
+    () => ({ activeId, registerInput, focusInput }),
+    [activeId, registerInput, focusInput],
+  )
+
+  return (
+    <InputFocusContext.Provider value={value}>
+      {children}
+    </InputFocusContext.Provider>
+  )
+}
+
 // ── FocusTreeProvider ──
 
 export interface FocusTreeProviderProps {
@@ -682,7 +750,9 @@ export function FocusTreeProvider({
 
   return (
     <FocusTreeContext.Provider value={treeContext}>
-      <RootFocusZone scope={defaultScope}>{children}</RootFocusZone>
+      <InputFocusBridge>
+        <RootFocusZone scope={defaultScope}>{children}</RootFocusZone>
+      </InputFocusBridge>
     </FocusTreeContext.Provider>
   )
 }

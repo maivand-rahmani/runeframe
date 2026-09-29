@@ -6,6 +6,7 @@ import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
 import { FocusTreeProvider } from '../interaction/FocusTreeProvider.js'
 import { FrameworkProvider } from '../FrameworkProvider.js'
 import { ScreenRegistry } from '../screens/registry.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
 import { List, type ListItem } from './List.js'
 import type { ReactElement } from 'react'
 
@@ -41,6 +42,36 @@ async function waitForFrame(
     frame = getFrame() ?? ''
   }
   return frame
+}
+
+function cellInFrame(frame: string | undefined, text: string) {
+  const plain = (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  const lines = plain.split(/\r?\n/)
+  const y = lines.findIndex((line) => line.includes(text))
+  if (y < 0) throw new Error(`Could not find ${JSON.stringify(text)} in frame`)
+  return { x: lines[y].indexOf(text), y }
+}
+
+async function clickCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<0;${x};${y}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+async function wheelAtCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+  direction: 'up' | 'down',
+) {
+  const button = direction === 'up' ? 64 : 65
+  stdin.write(`\u001B[<${button};${cell.x + 1};${cell.y + 1}M`)
+  await delay()
 }
 
 const sampleItems: ListItem[] = [
@@ -232,6 +263,87 @@ describe('List', () => {
     expect(activated).toHaveLength(0)
   })
 
+  it('automatically hit-tests visible rows and preserves select-only click semantics', async () => {
+    const selected: string[] = []
+    const activated: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <List
+          items={sampleItems}
+          onSelect={(id) => selected.push(id)}
+          onActivate={(id) => activated.push(id)}
+          renderItem={(item, { focused }) => (
+            <Text>
+              {item.label}
+              {focused ? '*' : ''}
+            </Text>
+          )}
+        />
+      </MouseLayout>,
+    )
+
+    await delay(100)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Item Beta'))
+
+    expect(lastFrame()).toContain('Item Beta*')
+    expect(selected).toEqual(['b'])
+    expect(activated).toHaveLength(0)
+
+    stdin.write('\u001B[B')
+    await delay()
+    expect(lastFrame()).toContain('Item Gamma*')
+  })
+
+  it('keeps explicit row bounds authoritative beneath MouseLayout', async () => {
+    const selected: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <List
+          items={sampleItems}
+          onSelect={(id) => selected.push(id)}
+          mouseBoundsForItem={(item) =>
+            item.id === 'a' ? { x: 0, y: 0, width: 8, height: 1 } : undefined
+          }
+        />
+      </MouseLayout>,
+    )
+
+    await delay(100)
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Item Beta'))
+    expect(selected).toEqual([])
+
+    await clickCell(stdin, { x: 0, y: 0 })
+    expect(selected).toEqual(['a'])
+  })
+
+  it('cancels an automatic row press when reordering moves another row under it', async () => {
+    const selected: string[] = []
+    const orderedItems = [sampleItems[1], sampleItems[0], sampleItems[2]]
+    const view = (items: ListItem[]) => (
+      <FrameworkProvider registry={interactionRegistry} defaultScreen="test">
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <List
+            items={items}
+            onSelect={(id) => selected.push(id)}
+            renderItem={(item) => <Text>{item.label}</Text>}
+          />
+        </MouseLayout>
+      </FrameworkProvider>
+    )
+    const { stdin, lastFrame, rerender } = render(view(sampleItems))
+
+    await delay(100)
+    const originalCell = cellInFrame(lastFrame(), 'Item Alpha')
+    stdin.write(`\u001B[<0;${originalCell.x + 1};${originalCell.y + 1}M`)
+    await delay()
+    rerender(view(orderedItems))
+    await delay(100)
+    stdin.write(`\u001B[<0;${originalCell.x + 1};${originalCell.y + 1}m`)
+    await delay()
+
+    expect(selected).toEqual([])
+  })
+
   it('clips items beyond maxVisible', () => {
     const manyItems: ListItem[] = Array.from({ length: 10 }, (_, i) => ({
       id: `item-${i}`,
@@ -249,6 +361,130 @@ describe('List', () => {
     expect(frame).toContain('Item 2')
     expect(frame).not.toContain('Item 3')
     expect(frame).not.toContain('Item 9')
+  })
+
+  it('wheel-scrolls one item at a time, bubbles at its bounds, and never selects or activates', async () => {
+    const items = Array.from({ length: 5 }, (_, index) => ({
+      id: `wheel-${index}`,
+      label: `Wheel item ${index}`,
+    }))
+    const selected: string[] = []
+    const activated: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout
+        origin={{ x: 0, y: 0 }}
+        width={50}
+        height={12}
+        flexDirection="column"
+      >
+        <List
+          items={items}
+          maxVisible={2}
+          onSelect={(id) => selected.push(id)}
+          onActivate={(id) => activated.push(id)}
+          renderItem={(item, { focused }) => (
+            <Text>
+              {item.label}
+              {focused ? '*' : ''}
+            </Text>
+          )}
+        />
+      </MouseLayout>,
+    )
+    await delay(120)
+
+    const firstCell = cellInFrame(lastFrame(), 'Wheel item 0')
+    await wheelAtCell(stdin, firstCell, 'up')
+    expect(lastFrame()).toContain('Wheel item 0')
+
+    await wheelAtCell(stdin, firstCell, 'down')
+    expect(lastFrame()).not.toContain('Wheel item 0')
+    expect(lastFrame()).toContain('Wheel item 1')
+    expect(lastFrame()).toContain('Wheel item 2')
+
+    await wheelAtCell(stdin, firstCell, 'up')
+    expect(lastFrame()).toContain('Wheel item 0')
+
+    // Reach the bottom, then confirm the List reports no movement there.
+    for (let index = 0; index < 5; index++) {
+      await wheelAtCell(stdin, firstCell, 'down')
+    }
+    expect(lastFrame()).toContain('Wheel item 4')
+    const bottomFrame = lastFrame()
+    await wheelAtCell(stdin, firstCell, 'down')
+    expect(lastFrame()).toBe(bottomFrame)
+
+    // A row that is not in the visible slice has no mounted automatic target.
+    await clickCell(stdin, { x: 1, y: 2 })
+    expect(selected).toEqual([])
+    expect(activated).toEqual([])
+  })
+
+  it('keeps keyboard-focused rows visible and clamps when items or maxVisible shrink', async () => {
+    const items = Array.from({ length: 5 }, (_, index) => ({
+      id: `focus-${index}`,
+      label: `Focus item ${index}`,
+    }))
+    const view = (visible: number, currentItems: ListItem[]) => (
+      <FrameworkProvider registry={interactionRegistry} defaultScreen="test">
+        <MouseLayout
+          origin={{ x: 0, y: 0 }}
+          width={50}
+          height={12}
+          flexDirection="column"
+        >
+          <List
+            items={currentItems}
+            maxVisible={visible}
+            renderItem={(item, { focused }) => (
+              <Text>
+                {item.label}
+                {focused ? '*' : ''}
+              </Text>
+            )}
+          />
+        </MouseLayout>
+      </FrameworkProvider>
+    )
+    const { stdin, lastFrame, rerender } = render(view(2, items))
+    await delay(120)
+
+    stdin.write('\u001B[B')
+    await delay()
+    stdin.write('\u001B[B')
+    await delay()
+    expect(lastFrame()).toContain('Focus item 2*')
+    expect(lastFrame()).toContain('Focus item 1')
+    expect(lastFrame()).not.toContain('Focus item 0')
+
+    stdin.write('\u001B[A')
+    await delay()
+    expect(lastFrame()).toContain('Focus item 1*')
+
+    // Reducing the item count clamps the old offset back to the only valid
+    // window; reducing maxVisible also keeps the focused row in view.
+    rerender(view(2, items.slice(0, 2)))
+    await delay()
+    expect(lastFrame()).toContain('Focus item 0')
+    expect(lastFrame()).toContain('Focus item 1')
+    expect(lastFrame()).not.toContain('Focus item 2')
+
+    rerender(view(1, items.slice(0, 2)))
+    await delay()
+    expect(lastFrame()).toContain('Focus item 1*')
+    expect(lastFrame()).not.toContain('Focus item 0')
+  })
+
+  it('does not add blank rows for content shorter than maxVisible', () => {
+    const { lastFrame } = renderInTheme(
+      <KeyboardScopeProvider defaultScope="list">
+        <List items={sampleItems.slice(0, 2)} maxVisible={5} />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('Item Alpha')
+    expect(frame).toContain('Item Beta')
+    expect(frame).not.toContain('Item Gamma')
   })
 
   it('renders empty state without crashing', () => {

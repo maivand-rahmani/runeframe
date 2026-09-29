@@ -3,6 +3,8 @@ import { Box, Text } from 'ink'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useInputFocus } from '../interaction/useInputFocus.js'
 
 export interface TextInputProps {
   value?: string
@@ -29,6 +31,8 @@ export function TextInput({
   const value = isControlled ? controlledValue : internalValue
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
+  const inputFocus = useInputFocus()
+  const mouseRef = useAutoMouseArea({ onClick: inputFocus.focus })
 
   const ref = useRef({
     value,
@@ -54,9 +58,10 @@ export function TextInput({
   }
 
   useEffect(() => {
+    if (!inputFocus.focused) return
     suspend()
     return () => restore()
-  }, [suspend, restore])
+  }, [inputFocus.focused, suspend, restore])
 
   useKeyHandler(
     (event) => {
@@ -105,11 +110,11 @@ export function TextInput({
       }
     },
     'textinput',
-    { priority: 60 },
+    { enabled: inputFocus.focused, priority: 60 },
   )
 
   return (
-    <Box flexDirection="column">
+    <Box ref={mouseRef} flexDirection="column">
       <Box>
         {value.length > 0 ? (
           <Text color={colors.text.primary}>{value}</Text>

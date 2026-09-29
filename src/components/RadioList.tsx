@@ -1,4 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
@@ -7,6 +13,10 @@ import { useRegisterActions } from '../commands/ScopedActionRegistryProvider.js'
 import { InputConsumptionResult } from '../types.js'
 import { MouseArea } from '../interaction/MouseArea.js'
 import type { MouseBounds } from '../interaction/MouseArea.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
 
 // ── Data Types ──
 
@@ -36,6 +46,12 @@ export function RadioList({
 }: RadioListProps) {
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
+  const mouseGeometry = useMouseGeometry()
+  const mouseRegistry = useMouseRegistry()
+  const autoMouseEnabled =
+    mouseBoundsForItem == null &&
+    mouseGeometry != null &&
+    mouseRegistry != null
   const onSelectRef = useRef(onSelect)
   const selectedRef = useRef(selected)
   const optionsRef = useRef(options)
@@ -75,6 +91,18 @@ export function RadioList({
     ) {
       return
     }
+
+    focusIndexRef.current = index
+    setFocusIndex(index)
+    onSelectRef.current(option.value)
+  }
+
+  const handleAutoMouseSelect = (
+    renderedOption: RadioListOption,
+    index: number,
+  ) => {
+    const option = optionsRef.current[index]
+    if (!option || option !== renderedOption || option.disabled) return
 
     focusIndexRef.current = index
     setFocusIndex(index)
@@ -182,11 +210,11 @@ export function RadioList({
   }
 
   return (
-    <Box flexDirection="column">
+    <MouseLayout flexDirection="column">
       {options.map((opt, idx) => {
         const isFocused = idx === focusIndex
         const isSelected = selected === opt.value
-        const isDisabled = opt.disabled
+        const isDisabled = Boolean(opt.disabled)
 
         const bulletColor = isDisabled
           ? colors.text.muted
@@ -204,8 +232,8 @@ export function RadioList({
               ? colors.focus.ring
               : colors.text.primary
 
-        const row = (
-          <Box key={idx}>
+        const rowContents = (
+          <>
             <Text color={bulletColor} dimColor={isDisabled}>
               {isSelected ? '•' : '○'}
             </Text>
@@ -217,25 +245,53 @@ export function RadioList({
               {' '}
               {opt.label}
             </Text>
-          </Box>
+          </>
         )
         const mouseBounds = mouseBoundsForItem?.(opt, idx)
+        const rowKey = `${opt.value}:${idx}`
 
-        if (mouseBounds == null) return row
+        if (mouseBounds != null) {
+          return (
+            <MouseArea
+              key={rowKey}
+              bounds={mouseBounds}
+              disabled={isDisabled}
+              onClick={() => handleMouseSelect(opt, idx, mouseBounds)}
+            >
+              <Box>{rowContents}</Box>
+            </MouseArea>
+          )
+        }
 
-        return (
-          <MouseArea
-            key={`${opt.value}:${idx}`}
-            bounds={mouseBounds}
-            disabled={isDisabled}
-            onClick={() => handleMouseSelect(opt, idx, mouseBounds)}
-          >
-            {row}
-          </MouseArea>
-        )
+        if (autoMouseEnabled) {
+          return (
+            <RadioListAutoRow
+              key={rowKey}
+              disabled={isDisabled}
+              onClick={() => handleAutoMouseSelect(opt, idx)}
+            >
+              {rowContents}
+            </RadioListAutoRow>
+          )
+        }
+
+        return <Box key={rowKey}>{rowContents}</Box>
       })}
-    </Box>
+    </MouseLayout>
   )
+}
+
+function RadioListAutoRow({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: ReactNode
+  disabled: boolean
+  onClick: () => void
+}) {
+  const ref = useAutoMouseArea({ disabled, onClick })
+  return <Box ref={ref}>{children}</Box>
 }
 
 function sameMouseBounds(left: MouseBounds, right: MouseBounds): boolean {

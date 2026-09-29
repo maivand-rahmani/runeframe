@@ -174,5 +174,10 @@ export type {
   MouseBounds,
   MouseClickEvent,
 } from './interaction/MouseArea.js'
+export { MouseLayout } from './interaction/MouseLayout.js'
+export type {
+  MouseLayoutOrigin,
+  MouseLayoutProps,
+} from './interaction/MouseLayout.js'
 
 export * as experimental from './experimental/index.js'

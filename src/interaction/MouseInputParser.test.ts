@@ -3,9 +3,11 @@ import type { Key } from 'ink'
 import {
   MouseInputParser,
   SGR_MOUSE_MAX_FIELD_DIGITS,
+  decodeWheelDirection,
   isPlausibleMousePrefix,
   parseSgrMousePacket,
   type MouseInputRecord,
+  type SgrMousePacket,
 } from './MouseInputParser.js'
 
 function makeKey(overrides: Partial<Key> = {}): Key {
@@ -98,6 +100,85 @@ describe('parseSgrMousePacket', () => {
     ]) {
       expect(parseSgrMousePacket(text), text).toBeNull()
     }
+  })
+})
+
+describe('decodeWheelDirection', () => {
+  function packet(
+    button: number,
+    kind: SgrMousePacket['kind'] = 'press',
+  ): SgrMousePacket {
+    return { button, x: 0, y: 0, kind }
+  }
+
+  it('decodes bare wheel up/down press reports', () => {
+    expect(decodeWheelDirection(packet(64))).toBe('up')
+    expect(decodeWheelDirection(packet(65))).toBe('down')
+  })
+
+  it('ignores modifier bits on wheel codes', () => {
+    // Shift=4, Meta=8, Ctrl=16 (and combinations) decorate the same bases.
+    for (const [button, direction] of [
+      [68, 'up'],
+      [72, 'up'],
+      [80, 'up'],
+      [84, 'up'],
+      [88, 'up'],
+      [92, 'up'],
+      [69, 'down'],
+      [73, 'down'],
+      [81, 'down'],
+      [85, 'down'],
+      [89, 'down'],
+      [93, 'down'],
+    ] as const) {
+      expect(decodeWheelDirection(packet(button)), String(button)).toBe(
+        direction,
+      )
+    }
+  })
+
+  it('only routes the press form because wheel has no release', () => {
+    expect(decodeWheelDirection(packet(64, 'release'))).toBeNull()
+    expect(decodeWheelDirection(packet(65, 'release'))).toBeNull()
+    expect(decodeWheelDirection(packet(93, 'release'))).toBeNull()
+  })
+
+  it('rejects non-wheel, horizontal-wheel, motion and extended codes', () => {
+    for (const button of [
+      0,
+      1,
+      2,
+      3,
+      20,
+      32,
+      33,
+      34,
+      35,
+      66, // wheel left
+      67, // wheel right
+      96, // wheel up + motion bit
+      97, // wheel down + motion bit
+      128,
+      129,
+      255,
+    ]) {
+      expect(decodeWheelDirection(packet(button)), String(button)).toBeNull()
+    }
+  })
+
+  it('decodes a wheel report assembled from split input records', () => {
+    const parser = new MouseInputParser()
+    expect(parser.push(record('[')).held).toBe(true)
+
+    const update = parser.push(record('<68;12;7M'))
+    expect(update.packet).toEqual({
+      button: 68,
+      x: 11,
+      y: 6,
+      kind: 'press',
+    })
+    expect(decodeWheelDirection(update.packet!)).toBe('up')
   })
 })
 

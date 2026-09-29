@@ -3,6 +3,8 @@ import { Box, Text } from 'ink'
 import { useKeyHandler } from '../interaction/useKeyHandler.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { useShellSuspension } from '../interaction/KeyboardScopeProvider.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useInputFocus } from '../interaction/useInputFocus.js'
 
 export interface NumberInputProps {
   value?: number
@@ -40,6 +42,8 @@ export function NumberInput({
   })
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
+  const inputFocus = useInputFocus()
+  const mouseRef = useAutoMouseArea({ onClick: inputFocus.focus })
 
   useEffect(() => {
     if (isControlled && controlledValue !== undefined) {
@@ -82,9 +86,10 @@ export function NumberInput({
   }
 
   useEffect(() => {
+    if (!inputFocus.focused) return
     suspend()
     return () => restore()
-  }, [suspend, restore])
+  }, [inputFocus.focused, suspend, restore])
 
   function commitValue(raw: number): number {
     let final = raw
@@ -176,7 +181,7 @@ export function NumberInput({
       }
     },
     'textinput',
-    { priority: 60 },
+    { enabled: inputFocus.focused, priority: 60 },
   )
 
   const labelText = label ? `${label}: ` : ''
@@ -185,7 +190,7 @@ export function NumberInput({
     : (internalBuffer === '' && defaultValue !== undefined ? String(defaultValue) : internalBuffer || '0')
 
   return (
-    <Box>
+    <Box ref={mouseRef}>
       <Text color={colors.focus.ring}>[</Text>
       <Text color={colors.text.primary}> {labelText}{shownValue} </Text>
       <Text color={colors.focus.ring}>|</Text>

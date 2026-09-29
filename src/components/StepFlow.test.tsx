@@ -6,6 +6,11 @@ import { ThemeProvider } from '../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../interaction/KeyboardScopeProvider.js'
 import { ScopedActionRegistryProvider } from '../commands/ScopedActionRegistryProvider.js'
 import { StepFlow, type Step, type StepContext } from './StepFlow.js'
+import { FrameworkProvider } from '../FrameworkProvider.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { ScreenRegistry } from '../screens/registry.js'
+import { TextInput } from './TextInput.js'
+import stripAnsi from 'strip-ansi'
 
 function renderWithProviders(ui: ReactElement) {
   return render(
@@ -17,8 +22,39 @@ function renderWithProviders(ui: ReactElement) {
   )
 }
 
+const mouseRegistry = new ScreenRegistry()
+mouseRegistry.register({ id: 'test', title: 'Test', component: () => null })
+
+function renderWithMouse(ui: ReactElement) {
+  return render(
+    <FrameworkProvider registry={mouseRegistry} defaultScreen="test">
+      {ui}
+    </FrameworkProvider>,
+  )
+}
+
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+function findMarker(frame: string, marker: string): { x: number; y: number } {
+  const lines = stripAnsi(frame).split('\n')
+  for (let y = 0; y < lines.length; y++) {
+    const x = lines[y]!.indexOf(marker)
+    if (x !== -1) return { x, y }
+  }
+  throw new Error(`Marker not found: ${marker}`)
+}
+
+async function clickAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}M`)
+  await delay()
+  stdin.write(`\u001B[<0;${x + 1};${y + 1}m`)
+  await delay()
 }
 
 function makeCaptureStep(id: string, title: string) {
@@ -258,5 +294,91 @@ describe('StepFlow', () => {
     stdin.write('\u001b[C')
     await delay()
     expect(lastFrame()).toContain('Pick Mode')
+  })
+
+  it('hit-tests a field through StepFlow measured ancestors', async () => {
+    const onChange = vi.fn()
+    const fieldStep: Step = {
+      id: 'field',
+      title: 'Field',
+      component: () => <TextInput placeholder="step field" onChange={onChange} />,
+    }
+    const { stdin, lastFrame } = renderWithMouse(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <StepFlow steps={[fieldStep]} />
+      </MouseLayout>,
+    )
+
+    await delay()
+    const field = findMarker(lastFrame() ?? '', 'step field')
+    await clickAt(stdin, field.x, field.y)
+    stdin.write('x')
+    await delay()
+
+    expect(onChange).toHaveBeenCalledWith('x')
+  })
+
+  it('routes Back, Cancel, Next and Finish mouse clicks through guarded navigation', async () => {
+    let allowNext = false
+    const canProceed = vi.fn(() => allowNext)
+    const firstExit = vi.fn()
+    const lastExit = vi.fn()
+    const onCancel = vi.fn()
+    const onComplete = vi.fn()
+    const first: Step = {
+      id: 'choose',
+      title: 'Choose',
+      component: () => <Text>Choose body</Text>,
+      canProceed,
+      onExit: firstExit,
+    }
+    const last: Step = {
+      id: 'review',
+      title: 'Review',
+      component: () => <Text>Review body</Text>,
+      // The last step completes rather than applying the intermediate-step guard.
+      canProceed: () => false,
+      onExit: lastExit,
+    }
+
+    const { stdin, lastFrame } = renderWithMouse(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <StepFlow
+          steps={[first, last]}
+          onCancel={onCancel}
+          onComplete={onComplete}
+        />
+      </MouseLayout>,
+    )
+
+    await delay()
+    let marker = findMarker(lastFrame() ?? '', 'Next')
+    await clickAt(stdin, marker.x, marker.y)
+    expect(lastFrame()).toContain('Choose body')
+    expect(canProceed).toHaveBeenCalledTimes(1)
+    expect(firstExit).not.toHaveBeenCalled()
+
+    allowNext = true
+    marker = findMarker(lastFrame() ?? '', 'Next')
+    await clickAt(stdin, marker.x, marker.y)
+    expect(lastFrame()).toContain('Review body')
+    expect(firstExit).toHaveBeenCalledTimes(1)
+
+    marker = findMarker(lastFrame() ?? '', 'Back')
+    await clickAt(stdin, marker.x, marker.y)
+    expect(lastFrame()).toContain('Choose body')
+    expect(lastExit).toHaveBeenCalledTimes(1)
+
+    marker = findMarker(lastFrame() ?? '', 'Cancel')
+    await clickAt(stdin, marker.x, marker.y)
+    expect(onCancel).toHaveBeenCalledTimes(1)
+
+    marker = findMarker(lastFrame() ?? '', 'Next')
+    await clickAt(stdin, marker.x, marker.y)
+    expect(lastFrame()).toContain('Review body')
+    marker = findMarker(lastFrame() ?? '', 'Finish')
+    await clickAt(stdin, marker.x, marker.y)
+    expect(onComplete).toHaveBeenCalledTimes(1)
+    expect(onComplete).toHaveBeenCalledWith({})
   })
 })

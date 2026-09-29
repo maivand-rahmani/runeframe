@@ -1,4 +1,11 @@
-import { useRef, useEffect, useCallback, type ReactElement } from 'react'
+import {
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useState,
+  type ReactElement,
+} from 'react'
 import { Box, Text } from 'ink'
 import {
   useFocusGroup,
@@ -10,6 +17,10 @@ import { LAYOUT } from '../constants.js'
 import { InputConsumptionResult } from '../types.js'
 import { MouseArea } from '../interaction/MouseArea.js'
 import type { MouseBounds } from '../interaction/MouseArea.js'
+import { MouseScrollLayout } from '../interaction/MouseScrollLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
 
 // ── Data Types ──
 
@@ -43,11 +54,20 @@ export function List<T extends ListItem>({
   mouseBoundsForItem,
   renderItem,
 }: ListProps<T>) {
+  const mouseGeometry = useMouseGeometry()
+  const mouseRegistry = useMouseRegistry()
+  const autoMouseEnabled =
+    mouseBoundsForItem == null &&
+    mouseGeometry != null &&
+    mouseRegistry != null
   const safeMaxVisible = Math.max(1, maxVisible)
-  const displayItems =
-    items.length > safeMaxVisible
-      ? items.slice(0, safeMaxVisible)
-      : items
+  const maxScrollOffset = Math.max(0, items.length - safeMaxVisible)
+  const [scrollOffset, setScrollOffset] = useState(0)
+  const scrollOffsetRef = useRef(scrollOffset)
+  scrollOffsetRef.current = scrollOffset
+  const maxScrollOffsetRef = useRef(maxScrollOffset)
+  maxScrollOffsetRef.current = maxScrollOffset
+  const visibleItems = items.slice(scrollOffset, scrollOffset + safeMaxVisible)
 
   const {
     GroupProvider,
@@ -63,27 +83,71 @@ export function List<T extends ListItem>({
   focusedIdRef.current = focusedId
   const firstItemIdRef = useRef<string | null>(items[0]?.id ?? null)
   firstItemIdRef.current = items[0]?.id ?? null
+  const itemsRef = useRef(items)
+  itemsRef.current = items
   const onActivateRef = useRef(onActivate)
   onActivateRef.current = onActivate
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
   const activateGroupRef = useRef(activateGroup)
   activateGroupRef.current = activateGroup
-  const displayItemsRef = useRef(displayItems)
-  displayItemsRef.current = displayItems
+  const visibleItemsRef = useRef(visibleItems)
+  visibleItemsRef.current = visibleItems
   const mouseBoundsForItemRef = useRef(mouseBoundsForItem)
   mouseBoundsForItemRef.current = mouseBoundsForItem
   const prevFocusedIdRef = useRef<string | null>(null)
   const skipMouseFocusSelectRef = useRef<string | null>(null)
 
-  const handleMouseSelect = useCallback(
-    (id: string, focusItem: () => void, renderedBounds: MouseBounds) => {
-      const index = displayItemsRef.current.findIndex((item) => item.id === id)
-      if (index < 0) return
+  // Keep the focused item mounted inside the visible window. Focus can move
+  // through every item even though only the visible rows render Ink content.
+  useLayoutEffect(() => {
+    setScrollOffset((current) => {
+      let next = Math.min(current, maxScrollOffset)
+      const focusedIndex = items.findIndex((item) => item.id === focusedId)
+      if (focusedIndex >= 0) {
+        if (focusedIndex < next) next = focusedIndex
+        else if (focusedIndex >= next + safeMaxVisible) {
+          next = focusedIndex - safeMaxVisible + 1
+        }
+      }
+      return next
+    })
+  }, [focusedId, items, maxScrollOffset, safeMaxVisible])
 
-      const item = displayItemsRef.current[index]
+  const handleWheel = useCallback((direction: 'up' | 'down'): boolean => {
+    const current = scrollOffsetRef.current
+    const next = Math.max(
+      0,
+      Math.min(
+        maxScrollOffsetRef.current,
+        current + (direction === 'down' ? 1 : -1),
+      ),
+    )
+    if (next === current) return false
+    // Apply same-frame wheel reports against the latest committed offset.
+    scrollOffsetRef.current = next
+    setScrollOffset(next)
+    return true
+  }, [])
+
+  const handleMouseSelect = useCallback(
+    (
+      id: string,
+      index: number,
+      focusItem: () => void,
+      renderedBounds: MouseBounds,
+    ) => {
+      const item = itemsRef.current[index]
+      if (
+        item?.id !== id ||
+        index < scrollOffsetRef.current ||
+        index >= scrollOffsetRef.current + safeMaxVisible
+      ) {
+        return
+      }
+      const visibleIndex = index - scrollOffsetRef.current
       const resolver = mouseBoundsForItemRef.current
-      const currentBounds = resolver?.(item, index)
+      const currentBounds = resolver?.(item, visibleIndex)
       // Ignore callbacks retained by an old row after it has been removed,
       // filtered out, or had its explicit geometry removed.
       if (
@@ -92,6 +156,18 @@ export function List<T extends ListItem>({
       ) {
         return
       }
+
+      activateGroupRef.current()
+      if (focusedIdRef.current !== id) skipMouseFocusSelectRef.current = id
+      focusItem()
+      onSelectRef.current?.(id)
+    },
+    [safeMaxVisible],
+  )
+
+  const handleAutoMouseSelect = useCallback(
+    (id: string, focusItem: () => void) => {
+      if (!visibleItemsRef.current.some((item) => item.id === id)) return
 
       activateGroupRef.current()
       if (focusedIdRef.current !== id) skipMouseFocusSelectRef.current = id
@@ -132,25 +208,41 @@ export function List<T extends ListItem>({
 
   return (
     <GroupProvider>
-      <Box flexDirection="column">
-        {displayItems.map((item, index) => (
-          <ListItemRow
-            key={item.id}
-            item={item}
-            selectedId={selectedId}
-            mouseBounds={mouseBoundsForItem?.(item, index)}
-            onMouseSelect={handleMouseSelect}
-            renderItem={
-              renderItem as
-                | ((
-                    item: ListItem,
-                    state: { focused: boolean; selected: boolean },
-                  ) => ReactElement)
-                | undefined
-            }
-          />
-        ))}
-      </Box>
+      <MouseScrollLayout
+        flexDirection="column"
+        onWheel={items.length > safeMaxVisible ? handleWheel : undefined}
+      >
+        {items.map((item, index) => {
+          const visible =
+            items.length <= safeMaxVisible ||
+            (index >= scrollOffset && index < scrollOffset + safeMaxVisible)
+          return (
+            <ListItemRow
+              key={item.id}
+              item={item}
+              index={index}
+              visible={visible}
+              selectedId={selectedId}
+              mouseBounds={
+                visible
+                  ? mouseBoundsForItem?.(item, index - scrollOffset)
+                  : undefined
+              }
+              autoMouseEnabled={autoMouseEnabled}
+              onMouseSelect={handleMouseSelect}
+              onAutoMouseSelect={handleAutoMouseSelect}
+              renderItem={
+                renderItem as
+                  | ((
+                      item: ListItem,
+                      state: { focused: boolean; selected: boolean },
+                    ) => ReactElement)
+                  | undefined
+              }
+            />
+          )
+        })}
+      </MouseScrollLayout>
     </GroupProvider>
   )
 }
@@ -159,13 +251,18 @@ export function List<T extends ListItem>({
 
 interface ListItemRowProps {
   item: ListItem
+  index: number
+  visible: boolean
   selectedId?: string
   mouseBounds?: MouseBounds
+  autoMouseEnabled: boolean
   onMouseSelect?: (
     id: string,
+    index: number,
     focusItem: () => void,
     renderedBounds: MouseBounds,
   ) => void
+  onAutoMouseSelect?: (id: string, focusItem: () => void) => void
   renderItem?: (
     item: ListItem,
     state: { focused: boolean; selected: boolean },
@@ -174,18 +271,25 @@ interface ListItemRowProps {
 
 function ListItemRow({
   item,
+  index,
+  visible,
   selectedId,
   mouseBounds,
+  autoMouseEnabled,
   onMouseSelect,
+  onAutoMouseSelect,
   renderItem,
 }: ListItemRowProps) {
   const { colors } = useTheme()
   const { focused, onActivate } = useFocusable({ id: item.id })
   const isSelected = selectedId === item.id
 
-  let row: ReactElement
+  if (!visible) return null
+
+  let rowContents: ReactElement
+  let flexDirection: 'column' | undefined
   if (renderItem) {
-    row = <Box>{renderItem(item, { focused, selected: isSelected })}</Box>
+    rowContents = renderItem(item, { focused, selected: isSelected })
   } else {
     const labelColor = focused
       ? colors.focus.ring
@@ -193,8 +297,8 @@ function ListItemRow({
         ? colors.focus.active
         : colors.text.primary
 
-    row = (
-      <Box flexDirection="column">
+    rowContents = (
+      <>
         <Box>
           <Text color={labelColor} bold={isSelected}>
             {isSelected ? '• ' : '  '}
@@ -209,19 +313,52 @@ function ListItemRow({
             </Text>
           </Box>
         )}
-      </Box>
+      </>
+    )
+    flexDirection = 'column'
+  }
+
+  if (mouseBounds != null) {
+    return (
+      <MouseArea
+        bounds={mouseBounds}
+        onClick={() =>
+          onMouseSelect?.(item.id, index, onActivate, mouseBounds)
+        }
+      >
+        <Box flexDirection={flexDirection}>{rowContents}</Box>
+      </MouseArea>
     )
   }
 
-  if (mouseBounds == null) return row
+  if (autoMouseEnabled) {
+    return (
+      <AutoListItemRow
+        flexDirection={flexDirection}
+        onClick={() => onAutoMouseSelect?.(item.id, onActivate)}
+      >
+        {rowContents}
+      </AutoListItemRow>
+    )
+  }
 
+  return <Box flexDirection={flexDirection}>{rowContents}</Box>
+}
+
+function AutoListItemRow({
+  children,
+  flexDirection,
+  onClick,
+}: {
+  children: ReactElement
+  flexDirection?: 'column'
+  onClick: () => void
+}) {
+  const ref = useAutoMouseArea({ onClick })
   return (
-    <MouseArea
-      bounds={mouseBounds}
-      onClick={() => onMouseSelect?.(item.id, onActivate, mouseBounds)}
-    >
-      {row}
-    </MouseArea>
+    <Box ref={ref} flexDirection={flexDirection}>
+      {children}
+    </Box>
   )
 }
 

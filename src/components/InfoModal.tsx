@@ -1,5 +1,61 @@
+import type { ReactNode } from 'react'
 import { Text } from 'ink'
 import { useTheme } from '../design-system/ThemeProvider.js'
+import { MouseLayout } from '../interaction/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/MouseProvider.js'
+
+function DismissAction({
+  dismissLabel,
+  onDismiss,
+  activeColor,
+}: {
+  dismissLabel: string
+  onDismiss: () => void
+  activeColor: string
+}) {
+  const geometry = useMouseGeometry()
+  const registry = useMouseRegistry()
+  const hasMeasuredMouseHost =
+    geometry !== null &&
+    geometry.origin !== null &&
+    geometry.clip !== null &&
+    registry !== null
+
+  if (!hasMeasuredMouseHost) {
+    return (
+      <Text>
+        <Text color={activeColor}>[{dismissLabel}]</Text>
+        <Text dimColor> — Press Enter or Escape</Text>
+      </Text>
+    )
+  }
+
+  return (
+    <MouseLayout flexDirection="row">
+      <MeasuredAction onClick={onDismiss}>
+        <Text color={activeColor}>[{dismissLabel}]</Text>
+      </MeasuredAction>
+      <Text dimColor> — Press Enter or Escape</Text>
+    </MouseLayout>
+  )
+}
+
+function MeasuredAction({
+  children,
+  onClick,
+}: {
+  children: ReactNode
+  onClick: () => void
+}) {
+  const ref = useAutoMouseArea({ onClick })
+  return (
+    <MouseLayout ref={ref} flexDirection="row">
+      {children}
+    </MouseLayout>
+  )
+}
 
 export interface InfoModalProps {
   title?: string
@@ -25,10 +81,11 @@ export function InfoModal({
       </Text>
       <Text>{message}</Text>
       {details && <Text dimColor>{details}</Text>}
-      <Text>
-        <Text color={colors.focus.active}>[{dismissLabel}]</Text>
-        <Text dimColor> — Press Enter or Escape</Text>
-      </Text>
+      <DismissAction
+        dismissLabel={dismissLabel}
+        onDismiss={onDismiss}
+        activeColor={colors.focus.active}
+      />
     </>
   )
 }

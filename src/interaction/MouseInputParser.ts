@@ -23,6 +23,38 @@ export interface SgrMousePacket {
   kind: 'press' | 'release'
 }
 
+/** Wheel directions recognized from the SGR wheel base codes. */
+export type MouseWheelDirection = 'up' | 'down'
+
+/** SGR button-code base for wheel up. */
+const SGR_WHEEL_UP = 64
+
+/** SGR button-code base for wheel down. */
+const SGR_WHEEL_DOWN = 65
+
+/** SGR modifier bits (Shift 4, Meta 8, Ctrl 16) that decorate button codes. */
+const SGR_MODIFIER_MASK = 4 | 8 | 16
+
+/**
+ * Decode a complete SGR packet into a wheel direction.
+ *
+ * Only the press form of a wheel report is routed: xterm wheel encoding has
+ * no release, so a release-form report carrying a wheel code is not a wheel
+ * event. Modifier bits never change the base code, so Shift/Meta/Ctrl combos
+ * still decode to the same direction. Motion and extra-button bits (32, 128)
+ * move the base code away from 64/65 and are therefore not wheel reports;
+ * the caller keeps consuming those unsupported valid packets silently.
+ */
+export function decodeWheelDirection(
+  packet: SgrMousePacket,
+): MouseWheelDirection | null {
+  if (packet.kind !== 'press') return null
+  const base = packet.button & ~SGR_MODIFIER_MASK
+  if (base === SGR_WHEEL_UP) return 'up'
+  if (base === SGR_WHEEL_DOWN) return 'down'
+  return null
+}
+
 /**
  * Result of feeding one record into {@link MouseInputParser}.
  *

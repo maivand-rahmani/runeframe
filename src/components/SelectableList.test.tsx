@@ -49,6 +49,14 @@ async function clickCell(
   await delay()
 }
 
+async function wheelCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<65;${cell.x + 1};${cell.y + 1}M`)
+  await delay()
+}
+
 const sampleItems: ListItem[] = [
   { id: 'a', label: 'Apple', description: 'Fruit' },
   { id: 'b', label: 'Banana', description: 'Yellow fruit' },
@@ -222,5 +230,38 @@ describe('SelectableList', () => {
     stdin.write('\r')
     await delay()
     expect(activated).toEqual(['b'])
+  })
+
+  it('inherits List wheel scrolling without changing selection or activation', async () => {
+    const items: ListItem[] = Array.from({ length: 4 }, (_, index) => ({
+      id: `selectable-${index}`,
+      label: `Selectable ${index}`,
+    }))
+    const selected: string[] = []
+    const activated: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout
+        origin={{ x: 0, y: 0 }}
+        width={40}
+        height={10}
+        flexDirection="column"
+      >
+        <SelectableList
+          items={items}
+          maxVisible={2}
+          onSelect={(id) => selected.push(id)}
+          onActivate={(id) => activated.push(id)}
+        />
+      </MouseLayout>,
+    )
+    await delay(120)
+
+    const firstCell = cellInFrame(lastFrame(), 'Selectable 0')
+    await wheelCell(stdin, firstCell)
+    expect(lastFrame()).not.toContain('Selectable 0')
+    expect(lastFrame()).toContain('Selectable 1')
+    expect(lastFrame()).toContain('Selectable 2')
+    expect(selected).toEqual([])
+    expect(activated).toEqual([])
   })
 })

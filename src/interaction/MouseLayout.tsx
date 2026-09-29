@@ -42,7 +42,11 @@ export interface MouseLayoutProps extends BoxProps {
   origin?: MouseLayoutOrigin
 }
 
-const UNMEASURED: MouseGeometryValue = { origin: null, clip: null }
+const UNMEASURED: MouseGeometryValue = {
+  origin: null,
+  clip: null,
+  scrollAncestors: [],
+}
 
 function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
   if (typeof ref === 'function') {
@@ -118,8 +122,14 @@ export const MouseLayout = forwardRef<DOMElement, MouseLayoutProps>(
     const parentOriginX = parent?.origin?.x
     const parentOriginY = parent?.origin?.y
     const parentClip = parent?.clip ?? null
+    const parentScrollAncestors = parent?.scrollAncestors ?? []
 
     const geometry = useMemo<MouseGeometryValue>(() => {
+      // An enclosing scroll region stays an ancestor of this subtree even
+      // across a root-origin assertion: wheel routing follows the rendered
+      // tree, not the coordinate anchor.
+      const scrollAncestors = parentScrollAncestors
+
       if (originX !== undefined && originY !== undefined) {
         // Anchored root: the consumer owns the absolute origin; the measured
         // size of this box is the app-owned clip.
@@ -132,6 +142,7 @@ export const MouseLayout = forwardRef<DOMElement, MouseLayoutProps>(
             width: toMouseCell(metrics.width),
             height: toMouseCell(metrics.height),
           },
+          scrollAncestors,
         }
       }
 
@@ -139,7 +150,9 @@ export const MouseLayout = forwardRef<DOMElement, MouseLayoutProps>(
       // into a nested adapter: the consumer asserted an anchor, and inheriting
       // parent geometry would hide the mistake behind plausible but wrong
       // coordinates. Keep the whole subtree unanchored instead.
-      if (originSupplied) return UNMEASURED
+      if (originSupplied) {
+        return { origin: null, clip: null, scrollAncestors }
+      }
 
       // Nested adapter: compose the measured parent-relative offset. Without
       // an anchored, measured parent the subtree stays inert.
@@ -149,7 +162,7 @@ export const MouseLayout = forwardRef<DOMElement, MouseLayoutProps>(
         parentClip === null ||
         !metrics.hasMeasured
       ) {
-        return { origin: null, clip: parentClip }
+        return { origin: null, clip: parentClip, scrollAncestors }
       }
 
       return {
@@ -158,6 +171,7 @@ export const MouseLayout = forwardRef<DOMElement, MouseLayoutProps>(
           y: parentOriginY + toMouseCell(metrics.top),
         },
         clip: parentClip,
+        scrollAncestors,
       }
     }, [
       originSupplied,
@@ -166,6 +180,7 @@ export const MouseLayout = forwardRef<DOMElement, MouseLayoutProps>(
       parentOriginX,
       parentOriginY,
       parentClip,
+      parentScrollAncestors,
       metrics.hasMeasured,
       metrics.left,
       metrics.top,

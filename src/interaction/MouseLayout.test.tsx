@@ -151,25 +151,39 @@ describe('resolveAutoMouseBounds', () => {
     hasMeasured: true,
   }
 
+  const noScroll: number[] = []
+
   it('requires an anchored measured origin and a measured target', () => {
     expect(resolveAutoMouseBounds(null, measured)).toBeNull()
     expect(
-      resolveAutoMouseBounds({ origin: null, clip: null }, measured),
-    ).toBeNull()
-    expect(
-      resolveAutoMouseBounds({ origin: null, clip }, measured),
-    ).toBeNull()
-    expect(
-      resolveAutoMouseBounds({ origin: { x: 0, y: 0 }, clip: null }, measured),
+      resolveAutoMouseBounds(
+        { origin: null, clip: null, scrollAncestors: noScroll },
+        measured,
+      ),
     ).toBeNull()
     expect(
       resolveAutoMouseBounds(
-        { origin: { x: 0, y: 0 }, clip },
+        { origin: null, clip, scrollAncestors: noScroll },
+        measured,
+      ),
+    ).toBeNull()
+    expect(
+      resolveAutoMouseBounds(
+        { origin: { x: 0, y: 0 }, clip: null, scrollAncestors: noScroll },
+        measured,
+      ),
+    ).toBeNull()
+    expect(
+      resolveAutoMouseBounds(
+        { origin: { x: 0, y: 0 }, clip, scrollAncestors: noScroll },
         { ...measured, hasMeasured: false },
       ),
     ).toBeNull()
     expect(
-      resolveAutoMouseBounds({ origin: { x: 0, y: 0 }, clip }, measured),
+      resolveAutoMouseBounds(
+        { origin: { x: 0, y: 0 }, clip, scrollAncestors: noScroll },
+        measured,
+      ),
     ).toEqual({ x: 2, y: 1, width: 3, height: 1 })
   })
 
@@ -177,13 +191,13 @@ describe('resolveAutoMouseBounds', () => {
     const rootClip = { x: 0, y: 0, width: 4, height: 1 }
     expect(
       resolveAutoMouseBounds(
-        { origin: { x: 0, y: 0 }, clip: rootClip },
+        { origin: { x: 0, y: 0 }, clip: rootClip, scrollAncestors: noScroll },
         { left: 0, top: 0, width: 10, height: 2, hasMeasured: true },
       ),
     ).toEqual({ x: 0, y: 0, width: 4, height: 1 })
     expect(
       resolveAutoMouseBounds(
-        { origin: { x: 0, y: 0 }, clip: rootClip },
+        { origin: { x: 0, y: 0 }, clip: rootClip, scrollAncestors: noScroll },
         { left: 6, top: 0, width: 3, height: 1, hasMeasured: true },
       ),
     ).toBeNull()
@@ -206,7 +220,11 @@ describe('auto mouse area commit contract', () => {
 
     // Render-phase preparation for a moved, re-scoped and disabled target.
     const update = prepareAutoMouseAreaUpdate(
-      { origin: { x: 1, y: 2 }, clip: { x: 0, y: 0, width: 20, height: 10 } },
+      {
+        origin: { x: 1, y: 2 },
+        clip: { x: 0, y: 0, width: 20, height: 10 },
+        scrollAncestors: [],
+      },
       { left: 5, top: 4, width: 2, height: 1, hasMeasured: true },
       { scope: 'modal', priority: 3, disabled: true, onClick: nextClick },
     )
@@ -246,7 +264,7 @@ describe('auto mouse area commit contract', () => {
     }
 
     const update = prepareAutoMouseAreaUpdate(
-      { origin: null, clip: null },
+      { origin: null, clip: null, scrollAncestors: [] },
       { left: 0, top: 0, width: 0, height: 0, hasMeasured: false },
       {},
     )

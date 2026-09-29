@@ -51,7 +51,11 @@ export function resolveAutoMouseBounds(
   geometry: MouseGeometryValue | null,
   metrics: AutoMouseMetrics,
 ): MouseBounds | null {
-  const { origin, clip } = geometry ?? { origin: null, clip: null }
+  const { origin, clip } = geometry ?? {
+    origin: null,
+    clip: null,
+    scrollAncestors: [],
+  }
   if (origin === null || clip === null || !metrics.hasMeasured) return null
 
   const raw: MouseBounds = {

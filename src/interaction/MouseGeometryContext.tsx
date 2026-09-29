@@ -11,10 +11,12 @@ export interface MouseGeometryPoint {
 }
 
 /**
- * Measured composition state shared with the descendants of a `MouseLayout`.
+ * Measured composition state shared with the descendants of a `MouseLayout`
+ * or `MouseScrollLayout`.
  *
  * The value describes where the immediately enclosing measured box starts in
- * absolute zero-based terminal cells and which root-owned rectangle clips it.
+ * absolute zero-based terminal cells, which measured rectangle clips it and
+ * which wheel-only scroll regions enclose it.
  *
  * Automatic mouse targets must stay inert while `origin` or `clip` is `null`.
  */
@@ -28,11 +30,23 @@ export interface MouseGeometryValue {
   readonly origin: MouseGeometryPoint | null
   /**
    * App-owned clip rectangle in absolute zero-based cells, anchored to the
-   * measured bounds of the root `MouseLayout`. `null` until that root has
-   * measured. Only the root rectangle is modeled in this slice; arbitrary
-   * consumer overflow/scroll transforms are outside the contract.
+   * measured bounds of the root `MouseLayout` and intersected with every
+   * measured `MouseScrollLayout` viewport in between. `null` until that root
+   * (or the nearest unmeasured scroll viewport) has measured. Only explicitly
+   * modeled rectangles are composed; arbitrary consumer overflow/scroll
+   * transforms are outside the contract.
    */
   readonly clip: MouseBounds | null
+  /**
+   * Registration ids of the enclosing wheel-only `MouseScrollLayout` regions,
+   * outermost first, with the nearest enclosing viewport last. Empty outside
+   * any scroll region.
+   *
+   * This is the explicit scroll ancestry wheel routing uses to bubble: depth
+   * is never inferred from registration order. Descendants hand the last id
+   * to their wheel registration as the explicit `wheelParentId`.
+   */
+  readonly scrollAncestors: readonly number[]
 }
 
 /** Internal provider surface for {@link MouseGeometryValue}. */
@@ -41,9 +55,9 @@ export const MouseGeometryContext = createContext<MouseGeometryValue | null>(
 )
 
 /**
- * Measured mouse-geometry state from the nearest `MouseLayout` ancestor.
- * Returns `null` outside any `MouseLayout`, so keyboard-only trees keep their
- * current behavior.
+ * Measured mouse-geometry state from the nearest `MouseLayout` or
+ * `MouseScrollLayout` ancestor. Returns `null` outside any measured layout
+ * adapter, so keyboard-only trees keep their current behavior.
  */
 export function useMouseGeometry(): MouseGeometryValue | null {
   return useContext(MouseGeometryContext)

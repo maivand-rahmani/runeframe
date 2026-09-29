@@ -453,9 +453,65 @@ Props: `events`, `status`, `activeCommand?`, `maxVisibleLines?` (default 500).
 | `InfoModal` | `message`, `onDismiss`, `title?`, `details?`, `dismissLabel?` | Informational modal. |
 | `ToastProvider` / `useToast` | `children` | Toast host and context API. |
 
-## Mouse areas
+## Mouse interaction and scrolling
 
-`MouseArea` is the public mouse primitive. It renders `children` unchanged, is headless, and registers an explicit rectangle with the surrounding `MouseProvider` (composed by `FrameworkProvider`). Without a `MouseProvider` it renders children and does nothing.
+`FrameworkProvider` includes Runeframe's mouse input handling. Built-in controls can measure their own mouse targets when they render inside the opt-in `MouseLayout` tree. `MouseLayout` is a Box-equivalent adapter; it uses Ink's public layout metrics and adds no wrapper around the Box it represents.
+
+```tsx
+import React from 'react'
+import { Text } from 'ink'
+import {
+  AppShell,
+  FrameworkProvider,
+  List,
+  MouseLayout,
+  ScreenOutlet,
+  ScreenRegistry,
+} from 'runeframe'
+
+// Use this only when the live root is actually at zero-based cell (0, 0).
+const liveRootOrigin = { x: 0, y: 0 }
+const items = Array.from({ length: 24 }, (_, index) => ({
+  id: `item-${index + 1}`,
+  label: `Item ${index + 1}`,
+}))
+const registry = new ScreenRegistry()
+registry.register({
+  id: 'home',
+  title: 'Home',
+  sidebar: true,
+  category: 'main',
+  component: () => <List items={items} maxVisible={8} />,
+})
+
+function App() {
+  return (
+    <FrameworkProvider registry={registry} defaultScreen="home">
+      {/* Use as the root layout node; replace an existing root Box when possible. */}
+      <MouseLayout origin={liveRootOrigin} flexDirection="column">
+        <AppShell
+          sidebar={<Text>Navigation</Text>}
+          sidebarPosition="fixed"
+          scrollContent
+        >
+          <ScreenOutlet />
+        </AppShell>
+      </MouseLayout>
+    </FrameworkProvider>
+  )
+}
+```
+
+The example only has valid automatic coordinates if the supplied origin is correct. For nested application-owned `Box` ancestors between this root and a target, replace each with a nested `MouseLayout` using the same Box props; Runeframe measures its own built-in layout nodes. An ordinary `Box` in that path breaks the geometry chain and cannot be detected through Ink's public API. Use `MouseLayout` in place of an existing layout node when possible: introducing a new Box-equivalent node can change layout.
+
+- **Origin and output limits.** The root origin is an assertion, not something Runeframe can discover. Normal-screen scrollback, `<Static>` output before the live tree, and uncoordinated stdout/stderr writes can move the live frame; automatic coordinates are only valid if the application keeps the origin accurate. Alternate-screen output at `(0, 0)` is common, not guaranteed. Without a valid measured root, keyboard behavior remains available and automatic targets stay inactive.
+- **Built-in targets.** Measurable controls such as buttons, navigation rows, list rows, tabs, inputs, and modal actions can use automatic hit areas inside the measured tree. No per-control rectangles are needed. `List`/`SelectableList` scroll their visible row window with the wheel and keep keyboard focus visible. `AppShell` wheel scrolling is enabled only with `scrollContent` and a visible fixed sidebar (`sidebarPosition="fixed"`); a nested list gets the first chance and passes wheel input outward at its boundary. Wheel input changes viewport position only; it does not select or activate a row.
+- **Clipping limits.** Runeframe models its own measured viewport clips and scroll offsets. Arbitrary consumer clipping, transforms, and scroll containers are not inferred and are outside the automatic-geometry guarantee.
+- **Interactive output only.** Mouse input uses SGR reports in an interactive TTY. The test suite exercises synthetic input; PTY and named terminal-emulator compatibility have not been validated, so no named-terminal support is claimed.
+
+### Explicit `MouseArea`
+
+`MouseArea` remains the headless, explicit-bounds primitive. It renders `children` unchanged and registers a caller-supplied rectangle with the surrounding mouse registry. Without a `MouseProvider` it renders children and does nothing.
 
 ```tsx
 <MouseArea
@@ -466,16 +522,7 @@ Props: `events`, `status`, `activeCommand?`, `maxVisibleLines?` (default 500).
 </MouseArea>
 ```
 
-Mouse contract:
-
-- **Bounds are caller-supplied and absolute.** `MouseBounds` is a zero-based terminal-cell rectangle, half-open as `[x, x + width) × [y, y + height)`. Runeframe does not infer bounds from Ink/Yoga layout and performs no automatic layout hit testing.
-- **No bounds means keyboard-only.** Controls are keyboard-only unless the caller opts into mouse areas by supplying bounds; there is no ambient mouse behavior.
-- **Clicks only.** There are no hover, drag, or wheel events. `onClick` fires when a matching left press and release land on the area.
-- **Scope and modal rules.** An area with a `scope` participates only while that scope is active. While a modal is open, an area remains eligible if it has an explicit `scope="modal"` or if it registered while the modal was already open (for example content currently rendered inside the modal); areas registered before the modal opened stay unreachable.
-- **Overlap.** `priority` resolves overlaps (higher wins; ties go to the most recently registered area). `disabled` areas still win hit-testing and consume the click without calling `onClick` or passing through.
-- **No terminal compatibility claim yet.** Mouse support has not been validated against named terminal emulators; named compatibility will only be claimed after emulator testing.
-
-Props: `bounds`, `scope?`, `priority?` (default 0), `disabled?` (default `false`), `onClick?`, `children?`. Types: `MouseBounds`, `MouseClickEvent`.
+`MouseBounds` uses zero-based terminal cells and half-open rectangles: `[x, x + width) × [y, y + height)`. Explicit bounds remain caller-owned and are not inferred from Ink/Yoga layout. `MouseArea` handles clicks only: a matching left-button press and release must land on the area. `scope`, `priority` (default `0`), `disabled`, modal eligibility, and overlap behavior are unchanged. Types: `MouseAreaProps`, `MouseBounds`, `MouseClickEvent`.
 
 ## Theme
 

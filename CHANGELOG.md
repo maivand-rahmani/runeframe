@@ -1,5 +1,11 @@
 # runeframe
 
+## 0.5.1
+
+### Patch Changes
+
+- Add opt-in measured mouse targets for built-in controls and wheel scrolling for AppShell and lists.
+
 ## 0.4.6
 
 ### Patch Changes

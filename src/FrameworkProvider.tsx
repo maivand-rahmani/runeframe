@@ -1,15 +1,15 @@
 import type { ReactNode } from 'react'
 import { ThemeProvider } from './design-system/ThemeProvider.js'
-import { KeyboardScopeProvider } from './interaction/KeyboardScopeProvider.js'
-import { FocusTreeProvider } from './interaction/FocusTreeProvider.js'
-import { ScopedActionRegistryProvider } from './commands/ScopedActionRegistryProvider.js'
+import { KeyboardScopeProvider } from './interaction/keyboard/KeyboardScopeProvider.js'
+import { FocusTreeProvider } from './interaction/focus/FocusTreeProvider.js'
+import { ScopedActionRegistryProvider } from './commands/actions/ScopedActionRegistryProvider.js'
 import {
   NavigationProvider,
   type NavigationProviderProps,
 } from './navigation/NavigationProvider.js'
-import { MouseProvider } from './interaction/MouseProvider.js'
-import { ModalProvider } from './components/ModalProvider.js'
-import { ToastProvider } from './components/ToastProvider.js'
+import { MouseProvider } from './interaction/mouse/MouseProvider.js'
+import { ModalProvider } from './components/overlays/ModalProvider.js'
+import { ToastProvider } from './components/feedback/ToastProvider.js'
 
 export interface FrameworkProviderProps
   extends Pick<NavigationProviderProps, 'registry' | 'defaultScreen'> {

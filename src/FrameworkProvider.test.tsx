@@ -8,20 +8,20 @@ import {
 } from './FrameworkProvider.js'
 import { ScreenRegistry } from './screens/registry.js'
 import { useTheme } from './design-system/ThemeProvider.js'
-import { useKeyboardScope } from './interaction/KeyboardScopeProvider.js'
-import { useFocusGroup, useFocusable } from './interaction/FocusTreeProvider.js'
+import { useKeyboardScope } from './interaction/keyboard/KeyboardScopeProvider.js'
+import { useFocusGroup, useFocusable } from './interaction/focus/FocusTreeProvider.js'
 import {
   useRegisterActions,
   useScopedActionRegistry,
-} from './commands/ScopedActionRegistryProvider.js'
+} from './commands/actions/ScopedActionRegistryProvider.js'
 import { useNavigation } from './navigation/NavigationProvider.js'
-import { useModal } from './components/ModalProvider.js'
-import { useToast } from './components/ToastProvider.js'
-import { HotkeyHintBar } from './components/HotkeyHintBar.js'
-import { ConfirmModal } from './components/ConfirmModal.js'
-import { List, type ListItem } from './components/List.js'
-import { MouseArea, type MouseClickEvent } from './interaction/MouseArea.js'
-import { useMouseRegistry } from './interaction/MouseProvider.js'
+import { useModal } from './components/overlays/ModalProvider.js'
+import { useToast } from './components/feedback/ToastProvider.js'
+import { HotkeyHintBar } from './commands/ui/HotkeyHintBar.js'
+import { ConfirmModal } from './components/overlays/ConfirmModal.js'
+import { List, type ListItem } from './components/selection/List.js'
+import { MouseArea, type MouseClickEvent } from './interaction/mouse/MouseArea.js'
+import { useMouseRegistry } from './interaction/mouse/MouseProvider.js'
 
 const registry = new ScreenRegistry()
 registry.register({

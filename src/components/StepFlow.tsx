@@ -1,11 +1,11 @@
 import { useState, useCallback, useRef, useEffect, type ReactNode } from 'react'
 import { Box, Text } from 'ink'
-import { useKeyHandler } from '../interaction/useKeyHandler.js'
+import { useKeyHandler } from '../interaction/keyboard/useKeyHandler.js'
 import { InputConsumptionResult } from '../types.js'
-import { MouseLayout } from '../interaction/MouseLayout.js'
-import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
-import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
-import { useMouseRegistry } from '../interaction/MouseProvider.js'
+import { MouseLayout } from '../interaction/mouse/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/mouse/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/mouse/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/mouse/MouseProvider.js'
 
 function StepActionTarget({
   onClick,

@@ -4,16 +4,16 @@ import React from 'react'
 import { Text } from 'ink'
 import { normalizeFrame } from '../../test/integration-helpers.js'
 
-import { AppShell } from '../../src/components/AppShell.js'
-import { Sidebar } from '../../src/components/Sidebar.js'
-import { KeyboardScopeProvider } from '../../src/interaction/KeyboardScopeProvider.js'
+import { AppShell } from '../../src/components/layout/AppShell.js'
+import { Sidebar } from '../../src/components/navigation/Sidebar.js'
+import { KeyboardScopeProvider } from '../../src/interaction/keyboard/KeyboardScopeProvider.js'
 import { NavigationProvider } from '../../src/navigation/NavigationProvider.js'
 import { ScreenRegistry } from '../../src/screens/registry.js'
-import { ModalProvider } from '../../src/components/ModalProvider.js'
-import { ToastProvider } from '../../src/components/ToastProvider.js'
+import { ModalProvider } from '../../src/components/overlays/ModalProvider.js'
+import { ToastProvider } from '../../src/components/feedback/ToastProvider.js'
 import { ThemeProvider } from '../../src/design-system/ThemeProvider.js'
-import { ScopedActionRegistryProvider, useRegisterActions } from '../../src/commands/ScopedActionRegistryProvider.js'
-import { HotkeyHintBar } from '../../src/components/HotkeyHintBar.js'
+import { ScopedActionRegistryProvider, useRegisterActions } from '../../src/commands/actions/ScopedActionRegistryProvider.js'
+import { HotkeyHintBar } from '../../src/commands/ui/HotkeyHintBar.js'
 
 const registry = new ScreenRegistry()
 registry.register({ id: 'home', title: 'Home', component: () => React.createElement(Text, null, 'Home'), sidebar: true, category: 'main' })

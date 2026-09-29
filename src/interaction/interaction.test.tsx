@@ -6,16 +6,16 @@ import type { ReactElement, ReactNode } from 'react'
 import {
   KeyboardScopeProvider,
   useKeyboardScope,
-} from './KeyboardScopeProvider.js'
-import { useKeyHandler, useKeyBinding } from './useKeyHandler.js'
+} from './keyboard/KeyboardScopeProvider.js'
+import { useKeyHandler, useKeyBinding } from './keyboard/useKeyHandler.js'
 import {
   useFocusZone,
   useFocusGroup,
   useFocusable,
   FocusTreeProvider,
   FocusZoneContext,
-} from './FocusTreeProvider.js'
-import { ScopedActionRegistryProvider } from '../commands/ScopedActionRegistryProvider.js'
+} from './focus/FocusTreeProvider.js'
+import { ScopedActionRegistryProvider } from '../commands/actions/ScopedActionRegistryProvider.js'
 import { InputConsumptionResult } from '../types.js'
 import type { NormalizedKeyEvent } from '../types.js'
 

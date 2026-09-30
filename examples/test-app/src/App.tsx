@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -20,8 +22,10 @@ import {
   KeyboardDebugInspector,
   List,
   ListSelect,
+  LAYOUT,
   ModalDialog,
   MouseArea,
+  MouseLayout,
   NumberInput,
   NodeProcessRunner,
   Panel,
@@ -51,12 +55,27 @@ import {
   useToast,
   InputConsumptionResult,
   type Action,
+  type FrameworkProviderProps,
   type Step,
 } from 'runeframe'
 import { KeyboardRegistry, ScreenTransition } from 'runeframe/experimental'
 
 type RouteId = 'overview' | 'controls' | 'workflow' | 'runtime' | 'interactions'
 type ThemeMode = 'dark' | 'light'
+
+interface InteractionTabState {
+  activeTab: string
+  setActiveTab: (id: string) => void
+  compactMouse: boolean
+  mouseShellScrollable: boolean
+}
+
+const InteractionTabContext = createContext<InteractionTabState>({
+  activeTab: 'focus',
+  setActiveTab: () => {},
+  compactMouse: false,
+  mouseShellScrollable: false,
+})
 
 interface CommandDispatch {
   navigate: (screenId: RouteId) => void
@@ -227,7 +246,34 @@ const sidebarItems = [
   { id: 'interactions', label: 'Input lab', description: 'Focus + keys + mouse', category: 'system' },
 ]
 
-export function ShowcaseApp() {
+/**
+ * Optional mouse routing diagnostics. Typed through the public
+ * `FrameworkProviderProps` surface so this app does not need a new barrel
+ * export; `undefined` is a complete no-op.
+ */
+export type MouseDiagnosticsHandler = NonNullable<
+  FrameworkProviderProps['mouseDiagnostics']
+>
+
+export interface ShowcaseAppProps {
+  /**
+   * Forwarded to `FrameworkProvider` as mouse routing diagnostics. Off by
+   * default; tests pass a sink to observe routing decisions.
+   */
+  mouseDiagnostics?: MouseDiagnosticsHandler
+  /**
+   * Forwarded to `FrameworkProvider` as the normalized mouse event source.
+   * When provided, `MouseProvider` routes that channel and disables the
+   * legacy post-Ink SGR interceptor, so a report seen on both transports is
+   * dispatched exactly once. Supplied by the Windows default lane.
+   */
+  mouseEventSource?: FrameworkProviderProps['mouseEventSource']
+}
+
+export function ShowcaseApp({
+  mouseDiagnostics,
+  mouseEventSource,
+}: ShowcaseAppProps = {}) {
   const [themeMode, setThemeMode] = useState<ThemeMode>('dark')
   const toggleTheme = useCallback(() => {
     setThemeMode((mode) => (mode === 'dark' ? 'light' : 'dark'))
@@ -238,6 +284,8 @@ export function ShowcaseApp() {
       registry={screenRegistry}
       defaultScreen="overview"
       themeMode={themeMode}
+      mouseDiagnostics={mouseDiagnostics}
+      mouseEventSource={mouseEventSource}
     >
       <ShowcaseFrame themeMode={themeMode} onToggleTheme={toggleTheme} />
     </FrameworkProvider>
@@ -261,6 +309,15 @@ function ShowcaseFrame({
   const { toast } = useToast()
   const theme = useTheme()
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [interactionTab, setInteractionTab] = useState('focus')
+  const isMouseContract =
+    currentScreenId === 'interactions' && interactionTab === 'mouse'
+  // Keep the full shell on ordinary terminals. The local fixed-sidebar shell
+  // sizes its scroll viewport around the actual top and status bars; only
+  // short terminals need the more compact Mouse contract presentation.
+  const compactMouse = isMouseContract && compactHeight
+  const mouseShellScrollable =
+    isMouseContract && !compactHeight && columns >= LAYOUT.narrow
 
   const back = useCallback(() => {
     if (canGoBack) pop()
@@ -318,13 +375,16 @@ function ShowcaseFrame({
       />
       <Box flexDirection="row" gap={2}>
         <LiveActionCount />
-        <HotkeyHintBar scope="navigation" maxHints={columns < 64 ? 1 : 3} />
+        <HotkeyHintBar scope="navigation" maxHints={columns < 64 ? 1 : 2} />
       </Box>
     </Box>
   )
 
+  // Keep automatic geometry inside the measured Interaction lab; the other
+  // feature screens retain their existing Panel-wrapped layout paths.
   return (
-    <Box
+    <MouseLayout
+      origin={currentScreenId === 'interactions' ? { x: 0, y: 0 } : undefined}
       flexDirection="column"
       width={columns}
       backgroundColor={theme.colors.surface.base}
@@ -333,39 +393,49 @@ function ShowcaseFrame({
         columns={columns}
         sidebar={compactHeight ? undefined : sidebar}
         sidebarPosition="fixed"
-        topBar={
+        scrollContent={mouseShellScrollable}
+        topBar={compactMouse ? undefined : (
           <TopBar
             appName="RUNEFRAME / FEATURE LAB"
             screenTitle={currentScreen.title}
             columns={columns}
           />
-        }
-        statusBar={rows < 12 ? undefined : status}
+        )}
+        statusBar={rows < 12 || compactMouse ? undefined : status}
       >
-        <Box flexDirection="column" paddingX={1}>
+        <MouseLayout flexDirection="column" paddingX={1}>
           <Box marginBottom={1}>
             <Text color={theme.colors.text.muted}>PATH </Text>
             <Breadcrumbs maxItems={3} />
             {canGoBack && <Text color={theme.colors.text.muted}>  [b] back</Text>}
           </Box>
-          {paletteOpen ? (
-            <CommandPalette
-              registry={commandRegistry}
-              onClose={() => setPaletteOpen(false)}
-            />
-          ) : (
-            <ScreenTransition type="fade" duration={90}>
-              <ScreenOutlet />
-            </ScreenTransition>
-          )}
-          {!compactHeight && (
+          <InteractionTabContext.Provider
+            value={{
+              activeTab: interactionTab,
+              setActiveTab: setInteractionTab,
+              compactMouse,
+              mouseShellScrollable,
+            }}
+          >
+            {paletteOpen ? (
+              <CommandPalette
+                registry={commandRegistry}
+                onClose={() => setPaletteOpen(false)}
+              />
+            ) : (
+              <ScreenTransition type="fade" duration={90}>
+                <ScreenOutlet />
+              </ScreenTransition>
+            )}
+          </InteractionTabContext.Provider>
+          {!compactHeight && !compactMouse && (
             <Text dimColor>
               [ctrl+p] commands  [t] theme  [?] help  [0] replace route
             </Text>
           )}
-        </Box>
+        </MouseLayout>
       </AppShell>
-    </Box>
+    </MouseLayout>
   )
 }
 
@@ -384,7 +454,7 @@ function OverviewScreen() {
         <Text bold color={theme.colors.focus.active}>
           MAINTAINER BENCH
         </Text>
-        <Text color={theme.colors.text.muted}>  /  v0.5.0</Text>
+        <Text color={theme.colors.text.muted}>  /  v0.5.1</Text>
       </Box>
       <Text bold color={theme.colors.text.primary}>
         Public surface, in motion.
@@ -797,7 +867,12 @@ const interactionTabs = [
 
 function InteractionScreen() {
   const theme = useTheme()
-  const [activeTab, setActiveTab] = useState('focus')
+  const {
+    activeTab,
+    setActiveTab,
+    compactMouse,
+    mouseShellScrollable,
+  } = useContext(InteractionTabContext)
   const [traceRevision, setTraceRevision] = useState(0)
   const [tracer] = useState(() => new EventTracer(4))
   const { toast } = useToast()
@@ -820,10 +895,14 @@ function InteractionScreen() {
   )
 
   return (
-    <Box flexDirection="column">
-      <Box marginBottom={1}>
-        <Text bold color={theme.colors.focus.active}>INPUT LAB / 04</Text>
-        <Text color={theme.colors.text.muted}>  /  observable contracts, not assumptions</Text>
+    <MouseLayout flexDirection="column">
+      <Box marginBottom={compactMouse ? 0 : 1}>
+        <Text bold color={theme.colors.focus.active}>
+          {compactMouse ? 'INPUT LAB / 04 · MOUSE CONTRACT' : 'INPUT LAB / 04'}
+        </Text>
+        {!compactMouse && (
+          <Text color={theme.colors.text.muted}>  /  observable contracts, not assumptions</Text>
+        )}
       </Box>
       <Tabs
         tabs={interactionTabs}
@@ -831,7 +910,7 @@ function InteractionScreen() {
         onChange={setActiveTab}
         scope="navigation"
       />
-      <Box marginTop={1}>
+      <MouseLayout marginTop={1}>
         {activeTab === 'focus' && (
           <FocusTreeDemo
             onChoose={(value) => toast('success', `Focused action: ${value}.`)}
@@ -850,13 +929,20 @@ function InteractionScreen() {
             </Box>
           </Panel>
         )}
-        {activeTab === 'mouse' && <MouseContractDemo />}
+        {activeTab === 'mouse' && (
+          <MouseContractDemo
+            compact={compactMouse}
+            shellScrollable={mouseShellScrollable}
+          />
+        )}
         {activeTab === 'experimental' && <ExperimentalDemo />}
-      </Box>
-      <Box marginTop={1}>
-        <Text color={theme.colors.text.muted}>←/→ changes section · Tab moves between focus zones · Esc closes overlays.</Text>
-      </Box>
-    </Box>
+      </MouseLayout>
+      {!compactMouse && (
+        <Box marginTop={1}>
+          <Text color={theme.colors.text.muted}>←/→ changes section · Tab moves between focus zones · Esc closes overlays.</Text>
+        </Box>
+      )}
+    </MouseLayout>
   )
 }
 
@@ -976,29 +1062,145 @@ function FocusRow({ id, label }: { id: string; label: string }) {
 
 const mouseBounds = { x: 0, y: 0, width: 24, height: 1 }
 
-function MouseContractDemo() {
+const mouseListRows = [
+  { id: 'overview', label: '01 / Overview · route map' },
+  { id: 'controls', label: '02 / Controls · inputs and lists' },
+  { id: 'workflow', label: '03 / Workflow · guided steps' },
+  { id: 'process', label: '04 / Process · child output' },
+  { id: 'focus', label: '05 / Focus · zones and groups' },
+  { id: 'mouse', label: '06 / Mouse · clicks and wheel' },
+  { id: 'themes', label: '07 / Themes · dark and light' },
+]
+
+function MouseContractDemo({
+  compact,
+  shellScrollable,
+}: {
+  compact: boolean
+  shellScrollable: boolean
+}) {
   const theme = useTheme()
   const { toast } = useToast()
+  const [buttonActivations, setButtonActivations] = useState(0)
+  const [listActivations, setListActivations] = useState(0)
+  const [focusedRow, setFocusedRow] = useState('overview')
+  const focusedLabel =
+    mouseListRows.find((row) => row.id === focusedRow)?.label ?? '—'
+
   return (
-    <Panel title="MouseArea / caller-owned geometry">
-      <Text color={theme.colors.text.secondary}>One explicit rectangle, supplied in zero-based terminal cells:</Text>
-      <Box marginTop={1}>
-        <MouseArea
-          bounds={mouseBounds}
-          scope="navigation"
-          onClick={({ x, y }) => toast('info', `Reported click: x=${x}, y=${y}.`)}
+    <MouseLayout
+      borderStyle={compact ? undefined : 'round'}
+      borderColor={compact ? undefined : theme.colors.border.default}
+      flexDirection="column"
+      paddingX={compact ? 0 : 2}
+    >
+      <Text bold color={theme.colors.text.primary}>
+        MouseLayout / automatic targets
+      </Text>
+      <Text color={theme.colors.text.secondary}>
+        {compact
+          ? 'Click controls · Enter activates · wheel scrolls the List.'
+          : 'Click tabs, the button, or a List row.'}
+      </Text>
+      {!compact && (
+        <Text color={theme.colors.text.secondary}>
+          Enter activates; the List scrolls first, then an overflowing shell viewport can scroll.
+        </Text>
+      )}
+
+      <MouseLayout flexDirection="row" gap={2}>
+        <Button
+          variant="primary"
+          focused
+          onActivate={() => setButtonActivations((count) => count + 1)}
         >
-          <Text color={theme.colors.focus.active}>[ demo target · x=0 y=0 w=24 h=1 ]</Text>
-        </MouseArea>
-      </Box>
-      <Box marginTop={1} flexDirection="column">
-        <Text color={theme.colors.text.primary}>No automatic Ink layout hit testing.</Text>
-        <Text color={theme.colors.text.secondary}>No hover, drag, or wheel events.</Text>
-        <Text color={theme.colors.text.secondary}>This app makes no terminal-emulator compatibility claim.</Text>
-        <Text color={theme.colors.text.muted}>TTY-gated SGR capture is not verified end to end here.</Text>
-      </Box>
-      <Text color={theme.colors.text.muted}>The rectangle does not move with the printed row; it is an explicit caller assertion.</Text>
-    </Panel>
+          Run mouse action
+        </Button>
+        <Text dimColor>Button activations: {buttonActivations}</Text>
+      </MouseLayout>
+
+      <MouseLayout flexDirection="column">
+        <Text bold color={theme.colors.text.primary}>
+          Scrollable List / 7 rows · shows 3
+        </Text>
+        <List
+          items={mouseListRows}
+          selectedId={focusedRow}
+          onSelect={setFocusedRow}
+          onActivate={() => setListActivations((count) => count + 1)}
+          maxVisible={3}
+          renderItem={(item, state) => (
+            <Text
+              color={
+                state.focused
+                  ? theme.colors.focus.ring
+                  : state.selected
+                    ? theme.colors.focus.active
+                    : theme.colors.text.primary
+              }
+              bold={state.focused || state.selected}
+            >
+              {state.focused ? '› ' : '  '}{item.label}
+            </Text>
+          )}
+        />
+        <Text color={theme.colors.text.muted}>Keyboard focus: {focusedLabel}</Text>
+        <Text color={theme.colors.text.muted}>List activations: {listActivations}</Text>
+      </MouseLayout>
+
+      <MouseLayout flexDirection="column">
+        <Text bold color={theme.colors.text.primary}>
+          MouseArea / caller-owned geometry
+        </Text>
+        <Text color={theme.colors.text.secondary}>
+          {compact
+            ? 'Click-only target · bounds stay at (0,0), not on this row.'
+            : 'MouseArea is click-only: no hover, drag, or wheel.'}
+        </Text>
+        {!compact && (
+          <Text color={theme.colors.text.secondary}>
+            Bounds stay fixed at (0,0), not on this row.
+          </Text>
+        )}
+        <MouseLayout>
+          <MouseArea
+            bounds={mouseBounds}
+            scope="navigation"
+            onClick={({ x, y }) =>
+              toast('info', 'Reported click: x=' + x + ', y=' + y + '.')
+            }
+          >
+            <Text color={theme.colors.focus.active}>
+              [ demo target · x=0 y=0 w=24 h=1 ]
+            </Text>
+          </MouseArea>
+        </MouseLayout>
+      </MouseLayout>
+
+      {(!compact || shellScrollable) && (
+        <MouseLayout marginTop={compact ? 0 : 1} flexDirection="column">
+          <Text color={theme.colors.text.muted}>
+            {shellScrollable
+              ? 'List scrolls first; the shell scrolls only when its viewport has overflow.'
+              : 'List handles wheel; this Mouse tab stays in normal flow.'}
+          </Text>
+          <Text color={theme.colors.text.muted}>
+            Live origin (0,0) is a consumer assertion.
+          </Text>
+          <Text color={theme.colors.text.muted}>
+            The app opts into alternate screen.
+          </Text>
+          <Text color={theme.colors.text.muted}>
+            No terminal-emulator compatibility is claimed.
+          </Text>
+          {shellScrollable && (
+            <Text color={theme.colors.text.muted}>
+              Mouse report capture is TTY-gated; input uses SGR.
+            </Text>
+          )}
+        </MouseLayout>
+      )}
+    </MouseLayout>
   )
 }
 

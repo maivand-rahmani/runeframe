@@ -53,7 +53,7 @@ export function AppShell({
   sidebarPosition = 'flow',
   scrollContent = false,
 }: AppShellProps) {
-  const { columns: detectedColumns } = useWindowSize()
+  const { columns: detectedColumns, rows } = useWindowSize()
   const columns = columnsOverride ?? detectedColumns ?? LAYOUT.medium
   const theme = useTheme()
   const contentZoneId = useId()
@@ -69,9 +69,12 @@ export function AppShell({
   const isFixedSidebar = sidebarPosition === 'fixed' && showSidebar
   const isScrollable = scrollContent && isFixedSidebar
 
+  // Scroll mode owns a terminal-sized shell. Its scroll viewport grows into
+  // the space left after the optional top and status bars, rather than
+  // reserving a fixed number of rows that ignores their actual dimensions.
+  const shellHeight = Math.max(1, rows ?? 24)
+
   // Viewport scroll state
-  const { rows } = useWindowSize()
-  const viewportHeight = Math.max(1, Math.min(rows ?? 24, (rows ?? 24) - 3))
   const [scrollOffset, setScrollOffset] = useState(0)
   const scrollOffsetRef = useRef(scrollOffset)
   scrollOffsetRef.current = scrollOffset
@@ -139,16 +142,24 @@ export function AppShell({
     { deps: [isScrollable, scrollUp, scrollDown], priority: 50 },
   )
 
-  // Fixed sidebar + scrollable content uses absolute positioning for sidebar
-  // and wraps content in a viewport-height container.
+  // Fixed sidebar + scrollable content uses absolute positioning for the
+  // sidebar and lets its viewport fill the terminal-sized shell's free space.
   if (isFixedSidebar) {
     return (
-      <MouseLayout flexDirection="column">
+      <MouseLayout
+        flexDirection="column"
+        height={isScrollable ? shellHeight : undefined}
+      >
         {topBar != null && (
           <MouseLayout marginBottom={theme.spacing.sm}>{topBar}</MouseLayout>
         )}
 
-        <MouseLayout flexDirection="row" flexGrow={1}>
+        <MouseLayout
+          flexDirection="row"
+          flexGrow={1}
+          flexShrink={isScrollable ? 1 : undefined}
+          minHeight={isScrollable ? 0 : undefined}
+        >
           {showSidebar && (
             <MouseLayout
               position="absolute"
@@ -163,8 +174,9 @@ export function AppShell({
             <MouseScrollLayout
               ref={viewportRef}
               flexGrow={1}
+              flexShrink={1}
+              minHeight={0}
               marginLeft={showSidebar ? SIDEBAR_WIDTH : 0}
-              height={viewportHeight}
               overflow="hidden"
               onWheel={(direction) =>
                 scrollBy(direction === 'down' ? scrollStep : -scrollStep)

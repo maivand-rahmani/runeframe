@@ -18,6 +18,8 @@ import {
   type SgrMousePacket,
 } from './MouseInputParser.js'
 import type { MouseBounds, MouseClickEvent } from './MouseArea.js'
+import type { MouseEventSource } from './MouseEventSource.js'
+import type { NormalizedMouseEvent } from './SgrMouseStreamParser.js'
 
 /** Wheel directions recognized by `decodeWheelDirection`. */
 export type { MouseWheelDirection } from './MouseInputParser.js'
@@ -179,6 +181,87 @@ export function useMouseRegistry(): MouseRegistryValue | null {
   return useContext(MouseRegistryContext)
 }
 
+/**
+ * Bounded snapshot of one registered area considered while routing a packet.
+ * Contains only primitive metadata and bounds — never handler functions, and
+ * never user text.
+ */
+export interface MouseAreaDiagnosticSnapshot {
+  id: number
+  bounds: MouseBounds
+  priority: number
+  disabled: boolean
+  wheelOnly: boolean
+  scope?: FocusScope
+  /** Whether the pointer point falls inside the (valid) bounds. */
+  contains: boolean
+  /** Whether the area passed scope/modal eligibility at report time. */
+  eligible: boolean
+  /** `onClick` for click areas, `onWheel` for wheel-only regions. */
+  hasHandler: boolean
+}
+
+export type MouseDiagnosticAction =
+  | 'press'
+  | 'release'
+  | 'wheel-up'
+  | 'wheel-down'
+
+/** Why a packet dispatched or was consumed without activating anything. */
+export type MouseDiagnosticReason =
+  | 'press-pending'
+  | 'press-disabled'
+  | 'dispatched'
+  | 'no-handler'
+  | 'no-target'
+  | 'no-pending-press'
+  | 'press-had-no-target'
+  | 'modal-changed'
+  | 'missing-target'
+  | 'target-changed'
+  | 'disabled-at-press'
+  | 'disabled-at-release'
+  | 'not-clickable'
+  | 'unsupported-button'
+  | 'wheel-routed'
+  | 'wheel-no-target'
+
+/**
+ * One opt-in routing diagnostic for a single SGR packet. Reports the packet
+ * point/action, registered and eligible target counts, bounded area snapshots
+ * (ids/bounds/flags), the chosen press/release target, cancellation reason and
+ * whether `onClick` was actually invoked. Key text, handler functions and the
+ * raw packet are never included.
+ */
+export interface MouseDiagnosticEvent {
+  action: MouseDiagnosticAction
+  /** Zero-based terminal cell from the packet. */
+  x: number
+  y: number
+  /** All registered records (click areas plus wheel regions) at report time. */
+  registeredCount: number
+  /** Registered records of the relevant kind (click for press/release, wheel for wheel). */
+  areaCount: number
+  /** Relevant-kind areas that passed scope/modal eligibility. */
+  eligibleCount: number
+  /** Relevant-kind areas whose bounds contain the point. */
+  containingCount: number
+  /** Id of the resolved target, or `null` when none resolved. */
+  targetId: number | null
+  /** Id of the target resolved at press time (release reports only). */
+  pressedTargetId?: number | null
+  /** Whether `onClick` (or wheel routing) was invoked. */
+  dispatched: boolean
+  reason: MouseDiagnosticReason
+  /** Modal state at report time. */
+  modalOpen: boolean
+  /** Bounded snapshots of relevant-kind areas that are eligible or contain the point. */
+  areas: MouseAreaDiagnosticSnapshot[]
+}
+
+/** Cap on per-event area snapshots so diagnostics can never flood a log. */
+export const MAX_DIAGNOSTIC_AREA_SNAPSHOTS = 16
+
 export interface MouseProviderProps {
   children: ReactNode
   /**
@@ -186,6 +269,21 @@ export interface MouseProviderProps {
    * the default is {@link DEFAULT_MOUSE_PREFIX_TIMEOUT_MS}.
    */
   prefixTimeoutMs?: number
+  /**
+   * Optional opt-in routing diagnostics. Never called when omitted; callback
+   * errors are swallowed so routing and activation are unaffected. The latest
+   * callback from the most recent render is used.
+   */
+  diagnostics?: (event: MouseDiagnosticEvent) => void
+  /**
+   * Optional normalized mouse event source (for example a native input
+   * multiplexer). When provided, clicks and wheel notches are consumed from
+   * this channel and the legacy post-Ink SGR interceptor stays unregistered,
+   * so a report delivered through both transports can never dispatch twice.
+   * When omitted, routing is unchanged: the post-Ink SGR parser is the only
+   * source. The provider never subscribes to `stdin` for this channel.
+   */
+  mouseEventSource?: MouseEventSource
 }
 
 function writeMouseReset(stdout: NodeJS.WriteStream): void {
@@ -196,6 +294,44 @@ function writeMouseReset(stdout: NodeJS.WriteStream): void {
     stdout.write(MOUSE_RESET_SEQUENCE)
   } catch {
     // Teardown must never throw because a stream is already gone.
+  }
+}
+
+/** SGR modifier bits (Shift 4, Meta 8, Ctrl 16) carried by button codes. */
+const SGR_MODIFIER_SHIFT = 4
+const SGR_MODIFIER_META = 8
+const SGR_MODIFIER_CTRL = 16
+
+/** SGR base codes of the wheel press reports the router recognizes. */
+const SGR_WHEEL_UP = 64
+const SGR_WHEEL_DOWN = 65
+
+/**
+ * Re-encode one normalized source event as the packet shape the single router
+ * consumes. Modifier bits are preserved (they decorate wheel decoding but
+ * never move the button base), so hit testing, press/release pairing,
+ * modal/scope eligibility and wheel depth routing are shared with the post-Ink
+ * SGR path by construction.
+ */
+function normalizedEventToPacket(event: NormalizedMouseEvent): SgrMousePacket {
+  const modifiers =
+    (event.shift ? SGR_MODIFIER_SHIFT : 0) |
+    (event.alt ? SGR_MODIFIER_META : 0) |
+    (event.ctrl ? SGR_MODIFIER_CTRL : 0)
+  if (event.type === 'wheel') {
+    return {
+      button:
+        (event.direction === 'up' ? SGR_WHEEL_UP : SGR_WHEEL_DOWN) | modifiers,
+      x: event.x,
+      y: event.y,
+      kind: 'press',
+    }
+  }
+  return {
+    button: modifiers,
+    x: event.x,
+    y: event.y,
+    kind: event.type,
   }
 }
 
@@ -246,7 +382,12 @@ function writeMouseReset(stdout: NodeJS.WriteStream): void {
  * keeps the `modal` scope registered for its escape handler even when no
  * modal is open.
  */
-export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps) {
+export function MouseProvider({
+  children,
+  prefixTimeoutMs,
+  diagnostics,
+  mouseEventSource,
+}: MouseProviderProps) {
   const { registerInputInterceptor, dispatchInputEvent, isScopeActive } =
     useKeyboardScope()
   const { isModalOpen, modalStack } = useNavigation()
@@ -257,6 +398,20 @@ export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps)
   modalOpenRef.current = isModalOpen
   const modalStackRef = useRef(modalStack)
   modalStackRef.current = modalStack
+
+  // Opt-in diagnostics: the latest callback is used without re-creating any
+  // routing closure, and a throwing sink can never affect routing.
+  const diagnosticsRef = useRef(diagnostics)
+  diagnosticsRef.current = diagnostics
+  const reportDiagnostic = useCallback((event: MouseDiagnosticEvent) => {
+    const sink = diagnosticsRef.current
+    if (typeof sink !== 'function') return
+    try {
+      sink(event)
+    } catch {
+      // Diagnostics must never affect routing or activation.
+    }
+  }, [])
 
   const parserRef = useRef<MouseInputParser | null>(null)
   if (parserRef.current === null) {
@@ -403,6 +558,81 @@ export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps)
   )
 
   /**
+   * Bounded diagnostic snapshot of the relevant-area landscape at one point.
+   * Iterates the registry read-only; counts and ids/bounds/flags only — no
+   * handlers and no text. Used exclusively by the opt-in diagnostics sink.
+   */
+  const collectDiagnosticAreas = useCallback(
+    (x: number, y: number, kind: 'click' | 'wheel') => {
+      let areaCount = 0
+      let eligibleCount = 0
+      let containingCount = 0
+      const candidates: Array<{
+        snapshot: MouseAreaDiagnosticSnapshot
+        rank: number
+      }> = []
+      for (const entry of areasRef.current.values()) {
+        const area = entry.area
+        const wheelOnly = isWheelRegion(area)
+        if (kind === 'click' ? wheelOnly : !wheelOnly) continue
+        areaCount += 1
+        if (!isHittableBounds(area.bounds)) continue
+        const eligible = isEligible(entry)
+        const contains = containsPoint(area.bounds, x, y)
+        if (eligible) eligibleCount += 1
+        if (contains) containingCount += 1
+        if (!eligible && !contains) continue
+        candidates.push({
+          snapshot: {
+            id: area.id,
+            bounds: { ...area.bounds },
+            priority: area.priority,
+            // Only click areas carry `disabled`; wheel regions never do.
+            disabled: isWheelRegion(area) ? false : area.disabled,
+            wheelOnly,
+            scope: area.scope,
+            contains,
+            eligible,
+            hasHandler: isWheelRegion(area)
+              ? area.onWheel !== undefined
+              : area.onClick !== undefined,
+          },
+          rank: eligible && contains ? 2 : contains ? 1 : 0,
+        })
+      }
+      candidates.sort(
+        (a, b) => b.rank - a.rank || a.snapshot.id - b.snapshot.id,
+      )
+      return {
+        areaCount,
+        eligibleCount,
+        containingCount,
+        areas: candidates
+          .slice(0, MAX_DIAGNOSTIC_AREA_SNAPSHOTS)
+          .map((candidate) => candidate.snapshot),
+      }
+    },
+    [isEligible],
+  )
+
+  /**
+   * Snapshot collector that is a cheap no-op when no diagnostics sink is
+   * configured, so the default routing path does no extra registry work.
+   */
+  const collectAreasIfEnabled = useCallback(
+    (x: number, y: number, kind: 'click' | 'wheel') =>
+      typeof diagnosticsRef.current === 'function'
+        ? collectDiagnosticAreas(x, y, kind)
+        : {
+            areaCount: 0,
+            eligibleCount: 0,
+            containingCount: 0,
+            areas: [] as MouseAreaDiagnosticSnapshot[],
+          },
+    [collectDiagnosticAreas],
+  )
+
+  /**
    * Route one wheel report: deepest eligible viewport first, then its explicit
    * parent chain while handlers report no movement. A missing or ineligible
    * parent consumes the wheel so modal/scope restrictions are never escaped;
@@ -438,16 +668,51 @@ export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps)
       // have no release form and never touch the pending click press.
       const wheelDirection = decodeWheelDirection(packet)
       if (wheelDirection !== null) {
+        // Diagnostics resolve the wheel target separately; routing itself
+        // still runs through `dispatchWheel` unchanged.
+        const wheelTarget = findWheelTarget(packet.x, packet.y)
+        const wheelAreas = collectAreasIfEnabled(packet.x, packet.y, 'wheel')
         dispatchWheel(wheelDirection, packet.x, packet.y)
+        reportDiagnostic({
+          action: wheelDirection === 'up' ? 'wheel-up' : 'wheel-down',
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: wheelAreas.areaCount,
+          eligibleCount: wheelAreas.eligibleCount,
+          containingCount: wheelAreas.containingCount,
+          targetId: wheelTarget?.area.id ?? null,
+          dispatched: wheelTarget !== null,
+          reason: wheelTarget === null ? 'wheel-no-target' : 'wheel-routed',
+          modalOpen: modalOpenRef.current,
+          areas: wheelAreas.areas,
+        })
         return
       }
-      // Extended buttons and other bases are consumed but ignored.
-      if (packet.button > 31) return
+
+      const clickAreas = collectAreasIfEnabled(packet.x, packet.y, 'click')
       const base = packet.button & 3
       const isPress = packet.kind === 'press' && base === 0
       const isRelease =
         packet.kind === 'release' && (base === 0 || base === 3)
-      if (!isPress && !isRelease) return
+      // Extended buttons and other bases are consumed but ignored.
+      if (packet.button > 31 || (!isPress && !isRelease)) {
+        reportDiagnostic({
+          action: packet.kind,
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: clickAreas.areaCount,
+          eligibleCount: clickAreas.eligibleCount,
+          containingCount: clickAreas.containingCount,
+          targetId: null,
+          dispatched: false,
+          reason: 'unsupported-button',
+          modalOpen: modalOpenRef.current,
+          areas: clickAreas.areas,
+        })
+        return
+      }
 
       if (isPress) {
         const target = findTarget(packet.x, packet.y)
@@ -458,30 +723,186 @@ export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps)
           disabled: targetArea?.disabled ?? false,
           modalStack: modalStackRef.current,
         }
+        reportDiagnostic({
+          action: 'press',
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: clickAreas.areaCount,
+          eligibleCount: clickAreas.eligibleCount,
+          containingCount: clickAreas.containingCount,
+          targetId: targetArea?.id ?? null,
+          dispatched: false,
+          reason:
+            targetArea === null
+              ? 'no-target'
+              : targetArea.disabled
+                ? 'press-disabled'
+                : 'press-pending',
+          modalOpen: modalOpenRef.current,
+          areas: clickAreas.areas,
+        })
         return
       }
 
       const pending = pendingPressRef.current
       pendingPressRef.current = null
-      if (!pending || pending.entry === null) return
+      const pressedTargetId = pending?.entry?.area.id ?? null
+      if (!pending || pending.entry === null) {
+        reportDiagnostic({
+          action: 'release',
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: clickAreas.areaCount,
+          eligibleCount: clickAreas.eligibleCount,
+          containingCount: clickAreas.containingCount,
+          targetId: null,
+          pressedTargetId,
+          dispatched: false,
+          reason: pending === null ? 'no-pending-press' : 'press-had-no-target',
+          modalOpen: modalOpenRef.current,
+          areas: clickAreas.areas,
+        })
+        return
+      }
       // Modal routing must be unchanged for the whole gesture: a modal
       // opening/closing between press and release (even an open+close cycle)
       // cancels the stale activation.
-      if (modalStackRef.current !== pending.modalStack) return
+      if (modalStackRef.current !== pending.modalStack) {
+        reportDiagnostic({
+          action: 'release',
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: clickAreas.areaCount,
+          eligibleCount: clickAreas.eligibleCount,
+          containingCount: clickAreas.containingCount,
+          targetId: null,
+          pressedTargetId,
+          dispatched: false,
+          reason: 'modal-changed',
+          modalOpen: modalOpenRef.current,
+          areas: clickAreas.areas,
+        })
+        return
+      }
       const target = findTarget(packet.x, packet.y)
       // Deletion, re-registration, reordering, a scope change that reroutes
       // the point and any other eligibility change all alter (or clear) the
       // resolved entry, so a stale target can never activate on release.
-      if (target !== pending.entry) return
+      if (target !== pending.entry) {
+        reportDiagnostic({
+          action: 'release',
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: clickAreas.areaCount,
+          eligibleCount: clickAreas.eligibleCount,
+          containingCount: clickAreas.containingCount,
+          targetId: target?.area.id ?? null,
+          pressedTargetId,
+          dispatched: false,
+          reason: target === null ? 'missing-target' : 'target-changed',
+          modalOpen: modalOpenRef.current,
+          areas: clickAreas.areas,
+        })
+        return
+      }
       const targetArea = !isWheelRegion(target.area) ? target.area : null
-      if (targetArea === null) return
+      if (targetArea === null) {
+        reportDiagnostic({
+          action: 'release',
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: clickAreas.areaCount,
+          eligibleCount: clickAreas.eligibleCount,
+          containingCount: clickAreas.containingCount,
+          targetId: null,
+          pressedTargetId,
+          dispatched: false,
+          reason: 'not-clickable',
+          modalOpen: modalOpenRef.current,
+          areas: clickAreas.areas,
+        })
+        return
+      }
       // A target disabled at press, or disabled by release time, consumes the
       // gesture but must not activate.
-      if (pending.disabled || targetArea.disabled) return
-      targetArea.onClick?.({ x: packet.x, y: packet.y })
+      if (pending.disabled || targetArea.disabled) {
+        reportDiagnostic({
+          action: 'release',
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: clickAreas.areaCount,
+          eligibleCount: clickAreas.eligibleCount,
+          containingCount: clickAreas.containingCount,
+          targetId: targetArea.id,
+          pressedTargetId,
+          dispatched: false,
+          reason: pending.disabled ? 'disabled-at-press' : 'disabled-at-release',
+          modalOpen: modalOpenRef.current,
+          areas: clickAreas.areas,
+        })
+        return
+      }
+      // A matching, enabled target with no onClick consumes the gesture
+      // exactly like the `onClick?.()` no-op always did.
+      if (targetArea.onClick === undefined) {
+        reportDiagnostic({
+          action: 'release',
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: clickAreas.areaCount,
+          eligibleCount: clickAreas.eligibleCount,
+          containingCount: clickAreas.containingCount,
+          targetId: targetArea.id,
+          pressedTargetId,
+          dispatched: false,
+          reason: 'no-handler',
+          modalOpen: modalOpenRef.current,
+          areas: clickAreas.areas,
+        })
+        return
+      }
+      targetArea.onClick({ x: packet.x, y: packet.y })
+      reportDiagnostic({
+        action: 'release',
+        x: packet.x,
+        y: packet.y,
+        registeredCount: areasRef.current.size,
+        areaCount: clickAreas.areaCount,
+        eligibleCount: clickAreas.eligibleCount,
+        containingCount: clickAreas.containingCount,
+        targetId: targetArea.id,
+        pressedTargetId,
+        dispatched: true,
+        reason: 'dispatched',
+        modalOpen: modalOpenRef.current,
+        areas: clickAreas.areas,
+      })
     },
-    [dispatchWheel, findTarget],
+    [collectAreasIfEnabled, dispatchWheel, findTarget, findWheelTarget, reportDiagnostic],
   )
+
+  /**
+   * Normalized events from an external source re-enter the single packet
+   * router, so every routing rule (hit testing, pairing, modal/scope
+   * eligibility, wheel depth) is shared with the post-Ink path. The latest
+   * closure is kept in a ref so the subscription below survives re-renders
+   * without churning.
+   */
+  const handleNormalizedEvent = useCallback(
+    (event: NormalizedMouseEvent) => {
+      handlePacket(normalizedEventToPacket(event))
+    },
+    [handlePacket],
+  )
+  const handleNormalizedEventRef = useRef(handleNormalizedEvent)
+  handleNormalizedEventRef.current = handleNormalizedEvent
 
   // ── Prefix Timeout ────────────────────────────────────────────────
 
@@ -511,6 +932,10 @@ export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps)
   // ── Input Interception ────────────────────────────────────────────
 
   useEffect(() => {
+    // A configured event source owns mouse routing: the post-Ink interceptor
+    // stays unregistered, otherwise a report seen on both transports would be
+    // routed once per transport.
+    if (mouseEventSource !== undefined) return
     const parser = parserRef.current
     if (!parser) return
     return registerInputInterceptor((event) => {
@@ -535,12 +960,22 @@ export function MouseProvider({ children, prefixTimeoutMs }: MouseProviderProps)
       return false
     })
   }, [
+    mouseEventSource,
     registerInputInterceptor,
     dispatchInputEvent,
     clearTimer,
     armTimer,
     handlePacket,
   ])
+
+  // ── External Event Source ─────────────────────────────────────────
+
+  useEffect(() => {
+    if (mouseEventSource === undefined) return
+    return mouseEventSource.subscribe((event) => {
+      handleNormalizedEventRef.current(event)
+    })
+  }, [mouseEventSource])
 
   // Unmount hygiene: timers must not outlive the provider.
   useEffect(

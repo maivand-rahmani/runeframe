@@ -18,14 +18,16 @@ Install the peer dependencies in your application if your package manager does n
 npm install ink react
 ```
 
-Two entry points are published:
+Three import-only ESM entry points are published; use the Windows-specific one
+only on Windows (or import it dynamically):
 
 ```ts
 import { FrameworkProvider, ScreenRegistry } from 'runeframe'
 import { KeyboardRegistry, ScreenTransition } from 'runeframe/experimental'
+import { createWindowsInputTransport } from 'runeframe/windows-input'
 ```
 
-Both entries are import-only ESM. The package `exports` map exposes only `types` and `import` conditions.
+The package `exports` map exposes only `types` and `import` conditions.
 
 ## Quickstart
 
@@ -507,7 +509,7 @@ The example only has valid automatic coordinates if the supplied origin is corre
 - **Origin and output limits.** The root origin is an assertion, not something Runeframe can discover. Normal-screen scrollback, `<Static>` output before the live tree, and uncoordinated stdout/stderr writes can move the live frame; automatic coordinates are only valid if the application keeps the origin accurate. Alternate-screen output at `(0, 0)` is common, not guaranteed. Without a valid measured root, keyboard behavior remains available and automatic targets stay inactive.
 - **Built-in targets.** Measurable controls such as buttons, navigation rows, list rows, tabs, inputs, and modal actions can use automatic hit areas inside the measured tree. No per-control rectangles are needed. `List`/`SelectableList` scroll their visible row window with the wheel and keep keyboard focus visible. `AppShell` wheel scrolling is enabled only with `scrollContent` and a visible fixed sidebar (`sidebarPosition="fixed"`); a nested list gets the first chance and passes wheel input outward at its boundary. Wheel input changes viewport position only; it does not select or activate a row.
 - **Clipping limits.** Runeframe models its own measured viewport clips and scroll offsets. Arbitrary consumer clipping, transforms, and scroll containers are not inferred and are outside the automatic-geometry guarantee.
-- **Interactive output only.** Mouse input uses SGR reports in an interactive TTY. The test suite exercises synthetic input; PTY and named terminal-emulator compatibility have not been validated, so no named-terminal support is claimed.
+- **Interactive output only.** Mouse input uses SGR reports in an interactive TTY. The test suite exercises synthetic input, and the Windows-native transport has been exercised locally in Windows Terminal with PowerShell and cmd on win-x64. Other terminal emulators and PTYs remain unverified.
 
 ### Explicit `MouseArea`
 
@@ -523,6 +525,54 @@ The example only has valid automatic coordinates if the supplied origin is corre
 ```
 
 `MouseBounds` uses zero-based terminal cells and half-open rectangles: `[x, x + width) × [y, y + height)`. Explicit bounds remain caller-owned and are not inferred from Ink/Yoga layout. `MouseArea` handles clicks only: a matching left-button press and release must land on the area. `scope`, `priority` (default `0`), `disabled`, modal eligibility, and overlap behavior are unchanged. Types: `MouseAreaProps`, `MouseBounds`, `MouseClickEvent`.
+
+## Windows input (Ink)
+
+Runeframe publishes a Windows-only, import-only ESM subpath, `runeframe/windows-input`, for applications that want the native console input owner instead of Ink reading `process.stdin`. Load it dynamically (or only on win32) so non-Windows runs never import it.
+
+```tsx
+import { render } from 'ink'
+import { FrameworkProvider } from 'runeframe'
+
+const { createWindowsInputTransport } = await import('runeframe/windows-input')
+
+let instance: ReturnType<typeof render> | undefined
+let pendingFailure: Error | undefined
+
+const input = await createWindowsInputTransport({
+  onInputFailure: (error) => {
+    pendingFailure = error
+    instance?.unmount()
+  },
+})
+
+try {
+  instance = render(
+    <FrameworkProvider
+      registry={registry}
+      defaultScreen="home"
+      mouseEventSource={input.mouseEvents}
+    >
+      <App />
+    </FrameworkProvider>,
+    { stdin: input.stdin },
+  )
+  // A failure may land before `render` returns; honor the latch.
+  if (pendingFailure) instance.unmount()
+  await instance.waitUntilExit()
+} finally {
+  // Ink must be unmounted before the transport releases the console.
+  instance?.unmount()
+  await input.close()
+}
+```
+
+`registry`, `defaultScreen`, and `App` are the application objects from the Quickstart. `input.stdin` is the Ink-facing stream (keyboard bytes only) and `input.mouseEvents` is the normalized mouse source; passing it as `mouseEventSource` routes that channel through `MouseProvider` instead of the post-Ink SGR interceptor. A wrapper component can accept the source as a prop and forward it to `FrameworkProvider` the same way.
+
+- **Lifecycle.** Create the transport before `render`. If the helper fails after readiness, `onInputFailure` fires once and the host unmounts Ink; every exit path then unmounts Ink and awaits `input.close()` in a `finally`. `close()` is idempotent and uses a bounded graceful helper stop.
+- **Packaging.** The helper is a self-contained NativeAOT executable shipped for `win-x64` and `win-arm64`; consumers need no .NET SDK or runtime, and unsupported platform/arch or a missing binary fails closed before `render`.
+- **Capability.** The helper is the sole reader of the console input queue; JavaScript never reads `process.stdin` or calls `setRawMode`. Keyboard bytes plus normalized left-button press/release and vertical wheel events are routed through the shared SGR multiplexer. Drag motion is ignored and has no API; right/middle buttons and horizontal wheel are ignored too.
+- **Acceptance.** Local win-x64 testing in Windows Terminal PowerShell and cmd reports working keyboard and mouse input. ARM64 runtime behavior and other terminal emulators have not been physically verified.
 
 ## Theme
 

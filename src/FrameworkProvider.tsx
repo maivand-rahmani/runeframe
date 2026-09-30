@@ -7,7 +7,11 @@ import {
   NavigationProvider,
   type NavigationProviderProps,
 } from './navigation/NavigationProvider.js'
-import { MouseProvider } from './interaction/mouse/MouseProvider.js'
+import {
+  MouseProvider,
+  type MouseDiagnosticEvent,
+} from './interaction/mouse/MouseProvider.js'
+import type { MouseEventSource } from './interaction/mouse/MouseEventSource.js'
 import { ModalProvider } from './components/overlays/ModalProvider.js'
 import { ToastProvider } from './components/feedback/ToastProvider.js'
 
@@ -16,6 +20,19 @@ export interface FrameworkProviderProps
   children: ReactNode
   themeMode?: 'dark' | 'light'
   onModalClose?: () => void
+  /**
+   * Optional opt-in mouse routing diagnostics forwarded to `MouseProvider`.
+   * When omitted nothing is reported; no platform coupling and no behavior
+   * change. Intended for a host-owned diagnostics sink.
+   */
+  mouseDiagnostics?: (event: MouseDiagnosticEvent) => void
+  /**
+   * Optional normalized mouse event source forwarded to `MouseProvider`.
+   * When provided, mouse routing consumes that channel and the legacy
+   * post-Ink SGR interceptor is disabled so a report seen on both transports
+   * dispatches exactly once. When omitted, behavior is unchanged.
+   */
+  mouseEventSource?: MouseEventSource
 }
 
 /**
@@ -37,6 +54,8 @@ export function FrameworkProvider({
   defaultScreen,
   themeMode = 'dark',
   onModalClose,
+  mouseDiagnostics,
+  mouseEventSource,
 }: FrameworkProviderProps) {
   return (
     <ThemeProvider mode={themeMode}>
@@ -47,7 +66,10 @@ export function FrameworkProvider({
               registry={registry}
               defaultScreen={defaultScreen}
             >
-              <MouseProvider>
+              <MouseProvider
+                diagnostics={mouseDiagnostics}
+                mouseEventSource={mouseEventSource}
+              >
                 <ToastProvider>
                   <ModalProvider onClose={onModalClose}>
                     {children}

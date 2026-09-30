@@ -38,6 +38,12 @@ function plainFrame(frame: string | undefined) {
   return (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
 }
 
+function frameRowCount(frame: string | undefined) {
+  const lines = plainFrame(frame).split(/\r?\n/)
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines.length
+}
+
 function cellInFrame(frame: string | undefined, text: string) {
   const lines = plainFrame(frame).split(/\r?\n/)
   const y = lines.findIndex((line) => line.includes(text))
@@ -312,6 +318,73 @@ describe('AppShell', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     expect(lastFrame()).toContain('Shell row 0')
     expect(lastFrame()).not.toContain('Shell row 2')
+  })
+
+  it('fits the full fixed-sidebar shell to terminal rows without losing scroll or click geometry', async () => {
+    const activated: string[] = []
+    const contentRows = Array.from({ length: 28 }, (_, index) =>
+      index === 1 ? (
+        <Button key={index} focused onActivate={() => activated.push('go')}>
+          Go
+        </Button>
+      ) : (
+        <Text key={index}>Shell row {index}</Text>
+      ),
+    )
+    const shell = (
+      <MouseLayout
+        origin={{ x: 0, y: 0 }}
+        width={100}
+        flexDirection="column"
+      >
+        <AppShell
+          columns={100}
+          topBar={<Text>Top bar</Text>}
+          sidebar={<Text>Navigation</Text>}
+          statusBar={<Text>Status bar</Text>}
+          sidebarPosition="fixed"
+          scrollContent
+        >
+          <MouseLayout flexDirection="column">{contentRows}</MouseLayout>
+        </AppShell>
+      </MouseLayout>
+    )
+
+    const { stdin, stdout, lastFrame } = renderInFrameworkShell(shell)
+    const initialFrame = lastFrame()
+    // Ink's testing stdout omits `rows`, so useWindowSize starts at its normal
+    // 24-row fallback. The first commit must already respect that constraint.
+    expect(frameRowCount(initialFrame)).toBeLessThanOrEqual(24)
+    expect(initialFrame).toContain('Top bar')
+    expect(initialFrame).toContain('Navigation')
+    expect(initialFrame).toContain('Status bar')
+    expect(initialFrame).toContain('Shell row 0')
+
+    // Then exercise a real Ink resize. Box metrics are measured from the
+    // constrained layout; no viewport dimensions are mocked in this test.
+    const resizableStdout = stdout as unknown as {
+      rows: number
+      emit: (event: string) => boolean
+    }
+    resizableStdout.rows = 12
+    resizableStdout.emit('resize')
+    await new Promise((resolve) => setTimeout(resolve, 120))
+
+    expect(frameRowCount(lastFrame())).toBeLessThanOrEqual(12)
+    expect(lastFrame()).toContain('Top bar')
+    expect(lastFrame()).toContain('Navigation')
+    expect(lastFrame()).toContain('Status bar')
+
+    const topCell = cellInFrame(lastFrame(), 'Shell row 0')
+    await wheelAtCell(stdin, topCell, 'down')
+    const scrolledFrame = lastFrame()
+    expect(scrolledFrame).not.toContain('Shell row 0')
+    expect(scrolledFrame).toContain('[Go]')
+    expect(frameRowCount(scrolledFrame)).toBeLessThanOrEqual(12)
+
+    await clickAtCell(stdin, cellInFrame(scrolledFrame, '[Go]'))
+    expect(activated).toEqual(['go'])
+    expect(frameRowCount(lastFrame())).toBeLessThanOrEqual(12)
   })
 
   it.each([

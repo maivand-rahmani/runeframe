@@ -17,6 +17,10 @@
     "./experimental": {
       "types": "./dist/experimental/index.d.ts",
       "import": "./dist/experimental/index.js"
+    },
+    "./windows-input": {
+      "types": "./dist/windows-input.d.ts",
+      "import": "./dist/windows-input.js"
     }
   },
   "files": [
@@ -37,13 +41,16 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "tsup src/index.ts src/experimental/index.ts --format esm --dts --sourcemap --clean",
+    "build": "tsup",
+    "build:native-windows": "node scripts/build-native-windows.mjs",
+    "stage:native-windows": "node scripts/stage-native-windows.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run src",
+    "test": "vitest run src scripts",
+    "test:scripts": "vitest run scripts",
     "test:integration:smoke": "vitest run --config vitest.integration.config.ts",
     "test:integration:full": "vitest run --config vitest.integration.config.ts --reporter verbose",
-    "prepack": "npm run build",
-    "pack:check": "npm run build && node scripts/pack-consumer-check.mjs",
+    "prepack": "npm run build && npm run stage:native-windows",
+    "pack:check": "npm run build && npm run stage:native-windows && node scripts/pack-consumer-check.mjs",
     "test-app": "node scripts/test-app.mjs",
     "test-app:check": "node scripts/test-app.mjs --check",
     "changeset": "changeset",

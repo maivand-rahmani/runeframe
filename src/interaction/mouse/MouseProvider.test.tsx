@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { render as inkRender, Text } from 'ink'
 import { render } from 'ink-testing-library'
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import {
   KeyboardScopeProvider,
@@ -10,9 +10,14 @@ import {
 } from '../keyboard/KeyboardScopeProvider.js'
 import {
   DEFAULT_MOUSE_PREFIX_TIMEOUT_MS,
+  MAX_DIAGNOSTIC_AREA_SNAPSHOTS,
   MOUSE_ENABLE_SEQUENCE,
   MOUSE_RESET_SEQUENCE,
   MouseProvider,
+  useMouseRegistry,
+  type MouseDiagnosticEvent,
+  type MouseWheelDirection,
+  type MouseWheelRegistration,
 } from './MouseProvider.js'
 import { MouseArea, type MouseBounds, type MouseClickEvent } from './MouseArea.js'
 import { useKeyHandler } from '../keyboard/useKeyHandler.js'
@@ -24,6 +29,8 @@ import {
 } from '../../navigation/NavigationProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import type { NormalizedKeyEvent } from '../../types.js'
+import type { MouseEventSource } from './MouseEventSource.js'
+import type { NormalizedMouseEvent } from './SgrMouseStreamParser.js'
 
 const registry = new ScreenRegistry()
 registry.register({
@@ -45,11 +52,20 @@ function delay(ms = 30) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function harness(children: ReactNode, prefixTimeoutMs?: number) {
+function harness(
+  children: ReactNode,
+  prefixTimeoutMs?: number,
+  diagnostics?: (event: MouseDiagnosticEvent) => void,
+  mouseEventSource?: MouseEventSource,
+) {
   return (
     <KeyboardScopeProvider>
       <NavigationProvider registry={registry} defaultScreen="home">
-        <MouseProvider prefixTimeoutMs={prefixTimeoutMs}>
+        <MouseProvider
+          prefixTimeoutMs={prefixTimeoutMs}
+          diagnostics={diagnostics}
+          mouseEventSource={mouseEventSource}
+        >
           {children}
         </MouseProvider>
       </NavigationProvider>
@@ -1069,6 +1085,105 @@ function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1
 }
 
+// ── External normalized event source doubles ────────────────────────────
+
+/**
+ * In-memory {@link MouseEventSource} double: records subscriptions, exposes
+ * the returned unsubscribe spy and delivers normalized events synchronously
+ * to every live subscriber.
+ */
+function fakeMouseEventSource() {
+  const listeners = new Set<(event: NormalizedMouseEvent) => void>()
+  const unsubscribe = vi.fn(
+    (listener: (event: NormalizedMouseEvent) => void) => {
+      listeners.delete(listener)
+    },
+  )
+  return {
+    source: {
+      subscribe(listener: (event: NormalizedMouseEvent) => void) {
+        listeners.add(listener)
+        return () => {
+          unsubscribe(listener)
+        }
+      },
+    } satisfies MouseEventSource,
+    emit(event: NormalizedMouseEvent) {
+      for (const listener of [...listeners]) listener(event)
+    },
+    listenerCount: () => listeners.size,
+    unsubscribe,
+  }
+}
+
+/** Zero-based button report for a fake source. */
+function sourceButtonEvent(
+  type: 'press' | 'release',
+  x: number,
+  y: number,
+): NormalizedMouseEvent {
+  return { type, button: 'left', x, y, shift: false, alt: false, ctrl: false }
+}
+
+/** Zero-based wheel notch for a fake source. */
+function sourceWheelEvent(
+  direction: MouseWheelDirection,
+  x: number,
+  y: number,
+): NormalizedMouseEvent {
+  return {
+    type: 'wheel',
+    direction,
+    x,
+    y,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  }
+}
+
+/**
+ * Wheel-only registration probe: mirrors `MouseScrollLayout`'s registration
+ * shape (stable explicit id, record mutated in place) without requiring a
+ * measured layout, so wheel routing can be exercised directly from a source.
+ */
+function WheelRegionProbe({
+  id,
+  bounds,
+  onWheel,
+  wheelParentId = null,
+  priority = 0,
+}: {
+  id: number
+  bounds: MouseBounds
+  onWheel?: (direction: MouseWheelDirection) => boolean
+  wheelParentId?: number | null
+  priority?: number
+}) {
+  const registry = useMouseRegistry()
+  const recordRef = useRef<MouseWheelRegistration | null>(null)
+  if (recordRef.current === null) {
+    recordRef.current = {
+      id,
+      bounds,
+      priority,
+      wheelOnly: true,
+      wheelParentId,
+      onWheel,
+    }
+  }
+  const record = recordRef.current
+  record.bounds = bounds
+  record.priority = priority
+  record.wheelParentId = wheelParentId
+  record.onWheel = onWheel
+  useLayoutEffect(() => {
+    if (!registry) return
+    return registry.registerWheelRegion(record)
+  }, [registry, record])
+  return null
+}
+
 describe('MouseProvider TTY lifecycle', () => {
   const AREA = { x: 0, y: 0, width: 2, height: 2 }
 
@@ -1114,6 +1229,293 @@ describe('MouseProvider TTY lifecycle', () => {
     expect(
       occurrences(stdout.writes.join(''), MOUSE_RESET_SEQUENCE),
     ).toBe(1)
+  })
+
+  it('keeps the 1000/1006 mode lifecycle when an event source is configured', async () => {
+    const source = fakeMouseEventSource()
+    const { instance, stdout } = renderWithStreams(
+      harness(
+        <MouseArea bounds={AREA} onClick={() => {}} />,
+        undefined,
+        undefined,
+        source.source,
+      ),
+      true,
+    )
+    await delay()
+
+    expect(stdout.writes.join('')).toContain(MOUSE_ENABLE_SEQUENCE)
+    expect(source.listenerCount()).toBe(1)
+
+    instance.unmount()
+    await delay()
+
+    const output = stdout.writes.join('')
+    expect(output).toContain(MOUSE_RESET_SEQUENCE)
+    expect(occurrences(output, MOUSE_ENABLE_SEQUENCE)).toBe(1)
+    expect(occurrences(output, MOUSE_RESET_SEQUENCE)).toBe(1)
+    expect(source.listenerCount()).toBe(0)
+  })
+})
+
+// ── External normalized event source ────────────────────────────────────
+
+describe('MouseProvider external mouse event source', () => {
+  const AREA = { x: 0, y: 0, width: 4, height: 4 }
+  const MODAL_AREA = { x: 10, y: 10, width: 4, height: 4 }
+  const WHEEL_AREA = { x: 0, y: 0, width: 6, height: 6 }
+
+  it('routes source clicks through the same hit testing and pairing rules', () => {
+    const source = fakeMouseEventSource()
+    const onClick = vi.fn()
+    render(
+      harness(
+        <MouseArea bounds={BOUNDS} onClick={onClick} />,
+        undefined,
+        undefined,
+        source.source,
+      ),
+    )
+
+    expect(source.listenerCount()).toBe(1)
+    expect(source.unsubscribe).not.toHaveBeenCalled()
+
+    source.emit(sourceButtonEvent('press', 1, 0))
+    source.emit(sourceButtonEvent('release', 1, 0))
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(onClick).toHaveBeenCalledWith({ x: 1, y: 0 })
+
+    // Half-open bounds: the right edge is exclusive.
+    source.emit(sourceButtonEvent('press', 4, 0))
+    source.emit(sourceButtonEvent('release', 4, 0))
+    expect(onClick).toHaveBeenCalledTimes(1)
+
+    // A release outside the pressed target never activates the press.
+    source.emit(sourceButtonEvent('press', 1, 0))
+    source.emit(sourceButtonEvent('release', 50, 50))
+    expect(onClick).toHaveBeenCalledTimes(1)
+
+    // A release with no pending press never activates.
+    source.emit(sourceButtonEvent('release', 1, 0))
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes source wheel notches deepest-first through the explicit parent chain', () => {
+    const source = fakeMouseEventSource()
+    const calls: string[] = []
+    let innerMoves = false
+    const inner = vi.fn((direction: MouseWheelDirection) => {
+      calls.push(`inner:${direction}`)
+      return innerMoves
+    })
+    const outer = vi.fn((direction: MouseWheelDirection) => {
+      calls.push(`outer:${direction}`)
+      return false
+    })
+    const onClick = vi.fn()
+
+    render(
+      harness(
+        <>
+          <MouseArea bounds={WHEEL_AREA} onClick={onClick} />
+          <WheelRegionProbe id={9001} bounds={WHEEL_AREA} onWheel={outer} />
+          <WheelRegionProbe
+            id={9002}
+            bounds={WHEEL_AREA}
+            wheelParentId={9001}
+            onWheel={inner}
+          />
+        </>,
+        undefined,
+        undefined,
+        source.source,
+      ),
+    )
+
+    // Deepest first, then the explicit parent while the child cannot move.
+    source.emit(sourceWheelEvent('down', 1, 1))
+    expect(calls).toEqual(['inner:down', 'outer:down'])
+
+    // A moved child stops routing before the parent.
+    calls.length = 0
+    innerMoves = true
+    source.emit(sourceWheelEvent('up', 1, 1))
+    expect(calls).toEqual(['inner:up'])
+
+    // Modifier flags decorate a report but never change the direction.
+    calls.length = 0
+    innerMoves = false
+    source.emit({
+      ...sourceWheelEvent('up', 1, 1),
+      shift: true,
+      alt: true,
+      ctrl: true,
+    })
+    expect(calls).toEqual(['inner:up', 'outer:up'])
+
+    // Wheel routing never invokes click areas; a report hitting nothing is
+    // consumed without residue.
+    expect(onClick).not.toHaveBeenCalled()
+    calls.length = 0
+    source.emit(sourceWheelEvent('down', 50, 50))
+    expect(calls).toEqual([])
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('does not double-dispatch when Ink also receives the same SGR report', async () => {
+    const source = fakeMouseEventSource()
+    const onClick = vi.fn()
+    const { stdin } = render(
+      harness(
+        <MouseArea bounds={BOUNDS} onClick={onClick} />,
+        undefined,
+        undefined,
+        source.source,
+      ),
+    )
+
+    // Source mode bypasses the post-Ink interceptor: an SGR report that still
+    // reaches Ink must route no click at all.
+    await click(stdin, 2, 1)
+    expect(onClick).not.toHaveBeenCalled()
+
+    // The source remains the single dispatch path.
+    source.emit(sourceButtonEvent('press', 1, 0))
+    source.emit(sourceButtonEvent('release', 1, 0))
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('unsubscribes on source swap and unmount, routing only the live source', async () => {
+    const first = fakeMouseEventSource()
+    const second = fakeMouseEventSource()
+    const onClick = vi.fn()
+    const area = <MouseArea bounds={AREA} onClick={onClick} />
+
+    const { rerender, unmount } = render(
+      harness(area, undefined, undefined, first.source),
+    )
+    expect(first.listenerCount()).toBe(1)
+
+    // Swapping the source detaches the old one and attaches the new one.
+    rerender(harness(area, undefined, undefined, second.source))
+    await delay()
+    expect(first.listenerCount()).toBe(0)
+    expect(first.unsubscribe).toHaveBeenCalledTimes(1)
+    expect(second.listenerCount()).toBe(1)
+
+    // A detached source can no longer route.
+    first.emit(sourceButtonEvent('press', 1, 1))
+    first.emit(sourceButtonEvent('release', 1, 1))
+    expect(onClick).not.toHaveBeenCalled()
+
+    second.emit(sourceButtonEvent('press', 1, 1))
+    second.emit(sourceButtonEvent('release', 1, 1))
+    expect(onClick).toHaveBeenCalledTimes(1)
+
+    // Unmount detaches the live subscription; later emissions are inert.
+    unmount()
+    await delay()
+    expect(second.listenerCount()).toBe(0)
+    expect(second.unsubscribe).toHaveBeenCalledTimes(1)
+    second.emit(sourceButtonEvent('press', 1, 1))
+    second.emit(sourceButtonEvent('release', 1, 1))
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels a source press when the modal stack changes before release', async () => {
+    const source = fakeMouseEventSource()
+    const background = vi.fn()
+    const modal = vi.fn()
+    let navigation: ReturnType<typeof useNavigation> | null = null
+
+    function Capture() {
+      navigation = useNavigation()
+      return null
+    }
+
+    render(
+      harness(
+        <>
+          <Capture />
+          <MouseArea bounds={AREA} onClick={background} />
+          <MouseArea bounds={MODAL_AREA} scope="modal" onClick={modal} />
+        </>,
+        undefined,
+        undefined,
+        source.source,
+      ),
+    )
+
+    // A modal opening mid-gesture cancels the stale background press.
+    source.emit(sourceButtonEvent('press', 1, 1))
+    navigation!.pushModal('modal-screen')
+    await delay()
+    source.emit(sourceButtonEvent('release', 1, 1))
+    expect(background).not.toHaveBeenCalled()
+
+    // While the modal is open only the modal area is reachable; background
+    // clicks are consumed without activation.
+    source.emit(sourceButtonEvent('press', 11, 11))
+    source.emit(sourceButtonEvent('release', 11, 11))
+    expect(modal).toHaveBeenCalledTimes(1)
+
+    source.emit(sourceButtonEvent('press', 1, 1))
+    source.emit(sourceButtonEvent('release', 1, 1))
+    expect(background).not.toHaveBeenCalled()
+
+    // After the modal closes the background area is reachable again.
+    navigation!.popModal()
+    await delay()
+    source.emit(sourceButtonEvent('press', 1, 1))
+    source.emit(sourceButtonEvent('release', 1, 1))
+    expect(background).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports source events through the same diagnostics sink', () => {
+    const source = fakeMouseEventSource()
+    const events: MouseDiagnosticEvent[] = []
+    render(
+      harness(
+        <MouseArea bounds={BOUNDS} onClick={() => {}} />,
+        undefined,
+        (event) => events.push(event),
+        source.source,
+      ),
+    )
+
+    source.emit(sourceButtonEvent('press', 1, 0))
+    source.emit(sourceButtonEvent('release', 1, 0))
+    source.emit(sourceWheelEvent('up', 1, 0))
+
+    expect(events.map((event) => `${event.action}:${event.reason}`)).toEqual([
+      'press:press-pending',
+      'release:dispatched',
+      'wheel-up:wheel-no-target',
+    ])
+    expect(events[0]).toMatchObject({
+      x: 1,
+      y: 0,
+      dispatched: false,
+      areaCount: 1,
+      containingCount: 1,
+    })
+    expect(events[1]).toMatchObject({
+      x: 1,
+      y: 0,
+      dispatched: true,
+      targetId: events[0]!.targetId,
+      pressedTargetId: events[0]!.targetId,
+    })
+  })
+
+  it('keeps the post-Ink SGR path as the default when no source is configured', async () => {
+    const onClick = vi.fn()
+    const { stdin } = render(
+      harness(<MouseArea bounds={BOUNDS} onClick={onClick} />),
+    )
+    await click(stdin, 2, 1)
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(onClick).toHaveBeenCalledWith({ x: 1, y: 0 })
   })
 })
 
@@ -1383,5 +1785,303 @@ describe('useInputFocus bridge', () => {
     stdin.write('x')
     await delay()
     expect(seen).toEqual(['solo:x'])
+  })
+})
+
+// ── Opt-in routing diagnostics ─────────────────────────────────────────
+
+describe('MouseProvider diagnostics (opt-in)', () => {
+  const DIAGNOSTIC_BOUNDS = { x: 1, y: 0, width: 3, height: 2 }
+
+  it('reports press/release target resolution and dispatch without changing the click', async () => {
+    const events: MouseDiagnosticEvent[] = []
+    const clicks: MouseClickEvent[] = []
+    const { stdin } = render(
+      harness(
+        <MouseArea
+          bounds={DIAGNOSTIC_BOUNDS}
+          onClick={(event) => clicks.push(event)}
+        />,
+        undefined,
+        (event) => events.push(event),
+      ),
+    )
+
+    await click(stdin, 2, 1)
+
+    // Activation is exactly the same as without diagnostics.
+    expect(clicks).toEqual([{ x: 1, y: 0 }])
+    expect(events).toHaveLength(2)
+    const [pressEvent, releaseEvent] = events
+    expect(pressEvent).toMatchObject({
+      action: 'press',
+      x: 1,
+      y: 0,
+      reason: 'press-pending',
+      dispatched: false,
+      registeredCount: 1,
+      areaCount: 1,
+      eligibleCount: 1,
+      containingCount: 1,
+      modalOpen: false,
+    })
+    expect(pressEvent!.targetId).toEqual(expect.any(Number))
+    expect(pressEvent!.areas).toHaveLength(1)
+    expect(pressEvent!.areas[0]).toMatchObject({
+      bounds: DIAGNOSTIC_BOUNDS,
+      priority: 0,
+      disabled: false,
+      wheelOnly: false,
+      contains: true,
+      eligible: true,
+      hasHandler: true,
+    })
+    // No handler function is ever part of the snapshot.
+    expect(Object.values(pressEvent!.areas[0]!)).not.toContainEqual(
+      expect.any(Function),
+    )
+    expect(releaseEvent).toMatchObject({
+      action: 'release',
+      reason: 'dispatched',
+      dispatched: true,
+      targetId: pressEvent!.targetId,
+      pressedTargetId: pressEvent!.targetId,
+      containingCount: 1,
+    })
+  })
+
+  it('reports a missing target for an empty route and for a point outside every area', async () => {
+    const emptyEvents: MouseDiagnosticEvent[] = []
+    const emptyRender = render(
+      harness(
+        <Text>no targets</Text>,
+        undefined,
+        (event) => emptyEvents.push(event),
+      ),
+    )
+    await click(emptyRender.stdin, 5, 5)
+    expect(emptyEvents.map((event) => event.reason)).toEqual([
+      'no-target',
+      'press-had-no-target',
+    ])
+    expect(emptyEvents[0]).toMatchObject({
+      registeredCount: 0,
+      areaCount: 0,
+      eligibleCount: 0,
+      containingCount: 0,
+      targetId: null,
+      areas: [],
+      dispatched: false,
+    })
+
+    const missedEvents: MouseDiagnosticEvent[] = []
+    const onClick = vi.fn()
+    const missedRender = render(
+      harness(
+        <MouseArea bounds={DIAGNOSTIC_BOUNDS} onClick={onClick} />,
+        undefined,
+        (event) => missedEvents.push(event),
+      ),
+    )
+    await click(missedRender.stdin, 50, 50)
+    expect(onClick).not.toHaveBeenCalled()
+    expect(missedEvents[0]).toMatchObject({
+      reason: 'no-target',
+      areaCount: 1,
+      eligibleCount: 1,
+      containingCount: 0,
+      targetId: null,
+    })
+    expect(missedEvents[0]!.areas[0]).toMatchObject({
+      contains: false,
+      eligible: true,
+    })
+  })
+
+  it('reports disabled, modal and unregistered cancellations without activating', async () => {
+    const disabledEvents: MouseDiagnosticEvent[] = []
+    const disabledClick = vi.fn()
+    const disabledRender = render(
+      harness(
+        <MouseArea
+          bounds={DIAGNOSTIC_BOUNDS}
+          disabled
+          onClick={disabledClick}
+        />,
+        undefined,
+        (event) => disabledEvents.push(event),
+      ),
+    )
+    await click(disabledRender.stdin, 2, 1)
+    expect(disabledClick).not.toHaveBeenCalled()
+    expect(disabledEvents.map((event) => event.reason)).toEqual([
+      'press-disabled',
+      'disabled-at-press',
+    ])
+
+    // Enabled at press, disabled before release.
+    const releaseDisabledEvents: MouseDiagnosticEvent[] = []
+    const releaseDisabledClick = vi.fn()
+    let disabled = false
+    function DisabledHost() {
+      return (
+        <MouseArea
+          bounds={DIAGNOSTIC_BOUNDS}
+          disabled={disabled}
+          onClick={releaseDisabledClick}
+        />
+      )
+    }
+    const releaseRender = render(
+      harness(
+        <DisabledHost />,
+        undefined,
+        (event) => releaseDisabledEvents.push(event),
+      ),
+    )
+    await press(releaseRender.stdin, 2, 1)
+    disabled = true
+    releaseRender.rerender(
+      harness(
+        <DisabledHost />,
+        undefined,
+        (event) => releaseDisabledEvents.push(event),
+      ),
+    )
+    await delay()
+    await release(releaseRender.stdin, 2, 1)
+    expect(releaseDisabledClick).not.toHaveBeenCalled()
+    expect(releaseDisabledEvents.map((event) => event.reason)).toEqual([
+      'press-pending',
+      'disabled-at-release',
+    ])
+
+    // A modal opening mid-gesture cancels the press.
+    const modalEvents: MouseDiagnosticEvent[] = []
+    const modalClick = vi.fn()
+    let navigation: ReturnType<typeof useNavigation> | null = null
+    function NavigationCapture() {
+      navigation = useNavigation()
+      return null
+    }
+    const modalRender = render(
+      harness(
+        <>
+          <NavigationCapture />
+          <MouseArea bounds={DIAGNOSTIC_BOUNDS} onClick={modalClick} />
+        </>,
+        undefined,
+        (event) => modalEvents.push(event),
+      ),
+    )
+    await press(modalRender.stdin, 2, 1)
+    navigation!.pushModal('modal-screen')
+    await delay()
+    await release(modalRender.stdin, 2, 1)
+    expect(modalClick).not.toHaveBeenCalled()
+    expect(modalEvents.map((event) => event.reason)).toEqual([
+      'press-pending',
+      'modal-changed',
+    ])
+
+    // A release without any press reports the missing-press reason.
+    const bareEvents: MouseDiagnosticEvent[] = []
+    const bareRender = render(
+      harness(
+        <MouseArea bounds={DIAGNOSTIC_BOUNDS} onClick={() => {}} />,
+        undefined,
+        (event) => bareEvents.push(event),
+      ),
+    )
+    await release(bareRender.stdin, 2, 1)
+    expect(bareEvents.map((event) => event.reason)).toEqual(['no-pending-press'])
+  })
+
+  it('reports missing-target when the pressed scope becomes ineligible', async () => {
+    const events: MouseDiagnosticEvent[] = []
+    const onClick = vi.fn()
+    let keyboard: ReturnType<typeof useKeyboardScope> | null = null
+    function KeyboardCapture() {
+      keyboard = useKeyboardScope()
+      return null
+    }
+    const { stdin } = render(
+      harness(
+        <>
+          <KeyboardCapture />
+          <MouseArea
+            bounds={DIAGNOSTIC_BOUNDS}
+            scope="list"
+            onClick={onClick}
+          />
+        </>,
+        undefined,
+        (event) => events.push(event),
+      ),
+    )
+
+    keyboard!.pushScope('list')
+    await delay()
+    await press(stdin, 2, 1)
+    keyboard!.popScope('list')
+    await delay()
+    await release(stdin, 2, 1)
+
+    expect(onClick).not.toHaveBeenCalled()
+    expect(events.map((event) => event.reason)).toEqual([
+      'press-pending',
+      'missing-target',
+    ])
+    expect(events[1]).toMatchObject({ targetId: null, dispatched: false })
+  })
+
+  it('keeps routing unchanged when the diagnostics sink throws', async () => {
+    const clicks: MouseClickEvent[] = []
+    const { stdin } = render(
+      harness(
+        <MouseArea
+          bounds={DIAGNOSTIC_BOUNDS}
+          onClick={(event) => clicks.push(event)}
+        />,
+        undefined,
+        () => {
+          throw new Error('diagnostics boom')
+        },
+      ),
+    )
+    await click(stdin, 2, 1)
+    expect(clicks).toEqual([{ x: 1, y: 0 }])
+  })
+
+  it('uses the latest sink after re-renders without touching activation', async () => {
+    const first: MouseDiagnosticEvent[] = []
+    const second: MouseDiagnosticEvent[] = []
+    const onClick = vi.fn()
+    const area = (
+      <MouseArea bounds={DIAGNOSTIC_BOUNDS} onClick={onClick} />
+    )
+    const { stdin, rerender } = render(
+      harness(area, undefined, (event) => first.push(event)),
+    )
+    await click(stdin, 2, 1)
+
+    rerender(harness(area, undefined, (event) => second.push(event)))
+    await delay()
+    await click(stdin, 2, 1)
+
+    expect(first.map((event) => event.reason)).toEqual([
+      'press-pending',
+      'dispatched',
+    ])
+    expect(second.map((event) => event.reason)).toEqual([
+      'press-pending',
+      'dispatched',
+    ])
+    expect(onClick).toHaveBeenCalledTimes(2)
+  })
+
+  it('caps per-event area snapshots', () => {
+    expect(MAX_DIAGNOSTIC_AREA_SNAPSHOTS).toBeGreaterThan(0)
+    expect(MAX_DIAGNOSTIC_AREA_SNAPSHOTS).toBeLessThanOrEqual(32)
   })
 })

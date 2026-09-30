@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only Windows console input harness: the shared production record core
+    plus the test harnesses. It lives under tests/native/win32-input and is
+    not part of the test app.
+
+    Build:
+      dotnet build -c Release
+    Output:
+      bin/Release/net10.0/Runeframe.Win32Input.dll
+
+    The record core (exit codes, interop, mode policy, protocol, translator,
+    session) is linked from src/input/transports/windows/native instead of being
+    duplicated; that is the exact source compiled into the production host.
+    Harness-only interop lives in Win32TestInterop.cs, and the production
+    Program.cs is not linked (this project has its own dispatcher).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Runeframe.Win32Input</AssemblyName>
+    <RootNamespace>Runeframe.Win32Input</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Shared record core, linked (never duplicated) from the library tree. -->
+    <Compile Include="..\..\..\src\input\transports\windows\native\ExitCodes.cs" />
+    <Compile Include="..\..\..\src\input\transports\windows\native\Win32Interop.cs" />
+    <Compile Include="..\..\..\src\input\transports\windows\native\ConsoleModePolicy.cs" />
+    <Compile Include="..\..\..\src\input\transports\windows\native\Protocol.cs" />
+    <Compile Include="..\..\..\src\input\transports\windows\native\RecordTranslator.cs" />
+    <Compile Include="..\..\..\src\input\transports\windows\native\RecordInputSession.cs" />
+  </ItemGroup>
+
+</Project>

@@ -1,6 +1,7 @@
 {
   "name": "runeframe",
   "version": "0.5.2",
+  "description": "Build mouse-first terminal apps with Ink and React, with full keyboard support",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/maivand-rahmani/runeframe.git"

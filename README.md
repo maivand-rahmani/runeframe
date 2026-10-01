@@ -1,10 +1,21 @@
 # Runeframe
 
-Runeframe 0.5 is a reusable Ink/React framework for building keyboard-first terminal applications: screen navigation, a hierarchical focus tree, scoped keyboard handling and actions, composable widgets, and async process sessions.
+Runeframe 0.5 is a reusable Ink/React framework for building mouse-first terminal applications without giving up keyboard control. It provides clickable measured components, hover, wheel scrolling, captured drag, screen navigation, hierarchical focus, scoped key bindings, composable widgets, and async process sessions.
 
 - **ESM-only.** Runeframe ships ECMAScript modules and nothing else. Use `import` (or dynamic `await import(...)`). There is no CommonJS entry point, so `require('runeframe')` does not work.
 - **Node.js `>= 22.0.0`.**
 - **Peer dependencies:** `ink ^7.0.2` and `react ^19.2.5`.
+
+## Mouse-first capabilities
+
+Runeframe's built-in controls measure their own mouse targets and route pointer input through the same providers as keyboard input:
+
+- **Clickable measured built-ins** — buttons, list rows, tabs, sidebar rows, inputs, and modal actions become clickable inside a measured `MouseLayout` tree, with no per-control rectangles required.
+- **Hover, wheel, and captured drag** — measured built-ins add hover cues and wheel scrolling (`List`/`SelectableList` row windows, and `AppShell` with `scrollContent`), while explicit `MouseArea` regions expose hover (`onEnter`/`onLeave`/`onMove`) and captured left-button drag (`onDragStart`/`onDragMove`/`onDragEnd`/`onDragCancel`).
+- **Keyboard alongside mouse** — built-in controls retain their keyboard interactions and focus behavior. If you build a custom `MouseArea`, provide its keyboard alternative yourself. Without a valid measured root, keyboard behavior remains available and automatic mouse targets stay inactive.
+- **Input routing** — TTY mouse reporting uses SGR; on Windows, the optional `runeframe/windows-input` transport normalizes console records through the same mouse router.
+
+See [Mouse interaction and scrolling](#mouse-interaction-and-scrolling) for `MouseLayout` origin requirements and geometry limits, and [Windows input (Ink)](#windows-input-ink) for the Windows transport. To try the showcase, run `npm run test-app` from the repository root (installs and smoke-tests `examples/test-app`, then launches the interactive app).
 
 ## Install
 
@@ -71,6 +82,8 @@ export function App() {
 
 render(<App />)
 ```
+
+The Quickstart is a keyboard-capable shell as shown. Measured mouse targets require wrapping the layout in `MouseLayout` with the correct origin and, on Windows, providing the native input transport; see [Mouse interaction and scrolling](#mouse-interaction-and-scrolling) and [Windows input (Ink)](#windows-input-ink) for full instructions.
 
 ## FrameworkProvider
 

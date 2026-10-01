@@ -1,17 +1,25 @@
 #!/usr/bin/env node
 /**
- * Package-consumer harness for `examples/test-app`.
+ * Local-source harness for `examples/test-app`.
  *
- * The app is a standalone consumer project pinned to the published
- * `runeframe@0.5.0` registry package. This runner:
+ * The app is a local-source consumer now: TypeScript `paths` in
+ * `examples/test-app/tsconfig.json` and the Vitest alias in
+ * `examples/test-app/vitest.config.ts` map the bare `runeframe`,
+ * `runeframe/experimental` and `runeframe/windows-input` specifiers to the
+ * repository entry points (`src/index.ts`, `src/experimental/index.ts`,
+ * `src/input/transports/windows/index.ts`), while `react` and `ink` resolve as
+ * singletons from the repository root `node_modules`. This runner:
  *
- *   1. validates that `examples/test-app/package.json` still depends on
- *      `runeframe` with the exact `"0.5.0"` specifier (never `file:`/link/workspace),
+ *   1. validates that the local source entry points exist, that
+ *      `examples/test-app/package.json` declares no package-local `runeframe`,
+ *      `react` or `ink` dependency, and that its lockfile never resolves a
+ *      published `runeframe` package from the registry,
  *   2. installs `examples/test-app` with `npm ci` only when its dependencies are
  *      absent or stale, using a lockfile-hash stamp under its own `node_modules`
  *      so an already-installed launch never touches the registry,
- *   3. verifies the installed package is exactly `runeframe@0.5.0`, resolved
- *      from `https://registry.npmjs.org/` and not a symlink into the repository,
+ *   3. verifies the install left no package-local `runeframe`, `react` or `ink`
+ *      copies behind and that `react`/`ink` resolve from the repository root
+ *      singleton installs,
  *   4. check mode (`--check`, CI): runs typecheck + the full test suite and exits;
  *   5. launch mode (default, `npm run test-app`): runs the automated showcase
  *      smoke test, then starts the interactive Ink app with Ctrl-C forwarded to
@@ -24,6 +32,7 @@
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,23 +42,26 @@ const repoRoot = path.resolve(scriptDir, '..')
 const projectDir = path.join(repoRoot, 'examples', 'test-app')
 const projectManifestPath = path.join(projectDir, 'package.json')
 const projectLockPath = path.join(projectDir, 'package-lock.json')
-const installedPackageDir = path.join(projectDir, 'node_modules', 'runeframe')
+const projectModulesDir = path.join(projectDir, 'node_modules')
+const rootManifestPath = path.join(repoRoot, 'package.json')
+const rootModulesDir = path.join(repoRoot, 'node_modules')
 const stampPath = path.join(
-  projectDir,
-  'node_modules',
+  projectModulesDir,
   '.runeframe-test-app-install-stamp.json',
 )
 
-const EXPECTED_RUNEFRAME_VERSION = '0.5.0'
-const REQUIRED_PACKAGES = [
-  'runeframe',
-  'react',
-  'ink',
-  'vitest',
-  'tsx',
-  'typescript',
-  'ink-testing-library',
+// Local-source entry points the test app aliases the bare `runeframe`,
+// `runeframe/experimental` and `runeframe/windows-input` specifiers to; they
+// must exist in the repository.
+const LOCAL_SOURCE_FILES = [
+  path.join('src', 'index.ts'),
+  path.join('src', 'experimental', 'index.ts'),
+  path.join('src', 'input', 'transports', 'windows', 'index.ts'),
 ]
+// Must never exist under examples/test-app/node_modules: runeframe comes from
+// the repository source, react/ink from the repository root singleton install.
+const FORBIDDEN_LOCAL_PACKAGES = ['runeframe', 'react', 'ink']
+const ROOT_SINGLETON_PACKAGES = ['react', 'ink']
 
 function log(message) {
   console.log(`[test-app] ${message}`)
@@ -70,43 +82,174 @@ function assertSupportedNode() {
   }
 }
 
+/** Dependencies the app expects to install locally (singletons excluded). */
+function declaredLocalPackages(manifest) {
+  const names = new Set()
+  for (const field of [
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+  ]) {
+    for (const name of Object.keys(manifest[field] ?? {})) {
+      names.add(name)
+    }
+  }
+  return [...names]
+    .filter((name) => !FORBIDDEN_LOCAL_PACKAGES.includes(name))
+    .sort()
+}
+
 function assertProjectManifest() {
   if (!fs.existsSync(projectManifestPath)) {
     fail(`missing ${path.relative(repoRoot, projectManifestPath)}`)
   }
   const manifest = readJson(projectManifestPath)
-  const specifier = manifest.dependencies?.runeframe
-  if (specifier !== EXPECTED_RUNEFRAME_VERSION) {
+  for (const field of [
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+  ]) {
+    for (const name of FORBIDDEN_LOCAL_PACKAGES) {
+      if (manifest[field]?.[name] !== undefined) {
+        fail(
+          `examples/test-app/package.json declares "${name}" in ${field}; the app ` +
+            'must consume runeframe from the repository source and react/ink from ' +
+            'the repository root node_modules, never a package-local copy.',
+        )
+      }
+    }
+  }
+}
+
+function assertLocalSource() {
+  if (!fs.existsSync(rootManifestPath)) {
+    fail('missing repository root package.json')
+  }
+  const rootManifest = readJson(rootManifestPath)
+  if (rootManifest.name !== 'runeframe') {
     fail(
-      `examples/test-app/package.json must depend on runeframe exactly ` +
-        `"${EXPECTED_RUNEFRAME_VERSION}" (found ${JSON.stringify(specifier)}). ` +
-        'The harness must consume the published registry package, never a local ' +
-        'tarball, file:, link: or workspace specifier.',
+      `repository root package.json is ${JSON.stringify(rootManifest.name)}, ` +
+        'expected "runeframe"',
+    )
+  }
+  for (const relative of LOCAL_SOURCE_FILES) {
+    const filePath = path.join(repoRoot, relative)
+    if (!fs.existsSync(filePath)) {
+      fail(
+        `local runeframe source entry point is missing: ${relative}. The test app ` +
+          'resolves the bare runeframe specifiers via tsconfig paths / Vitest ' +
+          'aliases to these repository files.',
+      )
+    }
+  }
+  for (const name of ROOT_SINGLETON_PACKAGES) {
+    const manifestPath = path.join(rootModulesDir, name, 'package.json')
+    if (!fs.existsSync(manifestPath)) {
+      fail(
+        `the repository root node_modules is missing ${name}; run \`npm install\` ` +
+          'at the repository root before the test app so both share one instance.',
+      )
+    }
+  }
+}
+
+function assertLockHasNoPublishedRuneframe() {
+  if (!fs.existsSync(projectLockPath)) {
+    fail(
+      'examples/test-app/package-lock.json is missing; run `npm install` inside ' +
+        'examples/test-app and commit the lockfile so `npm ci` stays deterministic.',
+    )
+  }
+  const lockText = fs.readFileSync(projectLockPath, 'utf8')
+  let lock
+  try {
+    lock = JSON.parse(lockText)
+  } catch (error) {
+    fail(`unparseable examples/test-app/package-lock.json: ${error.message}`)
+  }
+  if (lock.packages?.['node_modules/runeframe'] || lock.dependencies?.runeframe) {
+    fail(
+      'examples/test-app/package-lock.json still contains a package-local ' +
+        'runeframe entry; runeframe must resolve from the repository src via ' +
+        'tsconfig paths / Vitest alias. Regenerate the lockfile with `npm install`.',
+    )
+  }
+  if (lockText.includes('registry.npmjs.org/runeframe')) {
+    fail(
+      'examples/test-app/package-lock.json still resolves the published runeframe ' +
+        'registry package; remove the dependency and regenerate the lockfile.',
     )
   }
 }
 
+/**
+ * Lockfile-only stamp key: any change to examples/test-app/package-lock.json
+ * invalidates the install, nothing else does.
+ */
 function computeLockHash() {
   if (!fs.existsSync(projectLockPath)) {
     fail(
       'examples/test-app/package-lock.json is missing; run `npm install` inside ' +
-        'examples/test-app and commit the lockfile so `npm ci` can install from ' +
-        'the public registry.',
+        'examples/test-app and commit the lockfile so `npm ci` stays deterministic.',
     )
   }
-  const hash = crypto.createHash('sha256')
-  hash.update(fs.readFileSync(projectManifestPath))
-  hash.update(fs.readFileSync(projectLockPath))
-  return hash.digest('hex')
+  return crypto
+    .createHash('sha256')
+    .update(fs.readFileSync(projectLockPath))
+    .digest('hex')
 }
 
-function readInstalledVersion() {
-  const manifestPath = path.join(installedPackageDir, 'package.json')
-  if (!fs.existsSync(manifestPath)) return null
-  try {
-    return readJson(manifestPath).version ?? null
-  } catch {
-    return null
+function localPackagePath(name) {
+  return path.join(projectModulesDir, ...name.split('/'))
+}
+
+function assertNoLocalCopies() {
+  for (const name of FORBIDDEN_LOCAL_PACKAGES) {
+    const localPath = localPackagePath(name)
+    if (fs.existsSync(localPath)) {
+      fail(
+        `${path.relative(repoRoot, localPath)} is a package-local ${name} copy; ` +
+          'the app must consume runeframe from the repository source and react/ink ' +
+          'from the repository root node_modules.',
+      )
+    }
+  }
+}
+
+function assertDeclaredPackagesInstalled() {
+  const manifest = readJson(projectManifestPath)
+  for (const name of declaredLocalPackages(manifest)) {
+    const manifestPath = path.join(localPackagePath(name), 'package.json')
+    if (!fs.existsSync(manifestPath)) {
+      fail(
+        `examples/test-app is missing its declared dependency "${name}"; ` +
+          'delete examples/test-app/node_modules and rerun so `npm ci` installs it.',
+      )
+    }
+  }
+}
+
+function assertRootSingletonResolution() {
+  const projectRequire = createRequire(path.join(projectDir, 'package.json'))
+  const rootPrefix = rootModulesDir + path.sep
+  for (const name of ROOT_SINGLETON_PACKAGES) {
+    let resolved
+    try {
+      resolved = projectRequire.resolve(name)
+    } catch (error) {
+      fail(
+        `could not resolve ${name} from examples/test-app (${error.message}); ` +
+          'run `npm install` at the repository root first.',
+      )
+    }
+    if (!resolved.startsWith(rootPrefix)) {
+      fail(
+        `${name} resolves to ${resolved} instead of the repository root ` +
+          `node_modules singleton (${rootModulesDir}); remove the package-local copy.`,
+      )
+    }
   }
 }
 
@@ -119,15 +262,11 @@ function isInstallCurrent() {
     return false
   }
   if (stamp.lockHash !== computeLockHash()) return false
-  if (stamp.runeframeVersion !== EXPECTED_RUNEFRAME_VERSION) return false
-  if (readInstalledVersion() !== EXPECTED_RUNEFRAME_VERSION) return false
-  for (const name of REQUIRED_PACKAGES) {
-    const manifestPath = path.join(
-      projectDir,
-      'node_modules',
-      ...name.split('/'),
-      'package.json',
-    )
+  for (const name of FORBIDDEN_LOCAL_PACKAGES) {
+    if (fs.existsSync(localPackagePath(name))) return false
+  }
+  for (const name of declaredLocalPackages(readJson(projectManifestPath))) {
+    const manifestPath = path.join(localPackagePath(name), 'package.json')
     if (!fs.existsSync(manifestPath)) return false
   }
   return true
@@ -139,7 +278,6 @@ function writeStamp() {
     `${JSON.stringify(
       {
         lockHash: computeLockHash(),
-        runeframeVersion: EXPECTED_RUNEFRAME_VERSION,
         installedAt: new Date().toISOString(),
         node: process.versions.node,
       },
@@ -248,53 +386,12 @@ function runInteractiveNpm(args, cwd) {
   })
 }
 
-function assertInstalledRuneframe() {
-  const manifestPath = path.join(installedPackageDir, 'package.json')
-  if (!fs.existsSync(manifestPath)) {
-    fail(
-      `runeframe is not installed at ${path.relative(repoRoot, installedPackageDir)}; ` +
-        'the install step did not produce the expected consumer dependency.',
-    )
-  }
-  const installed = readJson(manifestPath)
-  if (installed.version !== EXPECTED_RUNEFRAME_VERSION) {
-    fail(
-      `installed runeframe version is ${installed.version ?? 'unknown'}, expected ` +
-        `exactly ${EXPECTED_RUNEFRAME_VERSION}. Remove examples/test-app/node_modules ` +
-        'and rerun so `npm ci` installs the pinned registry version.',
-    )
-  }
-  if (fs.lstatSync(installedPackageDir).isSymbolicLink()) {
-    fail(
-      `${path.relative(repoRoot, installedPackageDir)} is a symlink; the harness ` +
-        'must consume the published registry tarball, not a link to the repository.',
-    )
-  }
-
-  const lock = readJson(projectLockPath)
-  const locked = lock.packages?.['node_modules/runeframe']
-  if (!locked || locked.version !== EXPECTED_RUNEFRAME_VERSION) {
-    fail(
-      'examples/test-app/package-lock.json does not lock runeframe to exactly ' +
-        `${EXPECTED_RUNEFRAME_VERSION}; regenerate the lockfile with \`npm install\`.`,
-    )
-  }
-  const resolved = String(locked.resolved ?? '')
-  if (locked.link === true || !resolved.startsWith('https://registry.npmjs.org/')) {
-    fail(
-      'the lockfile entry for runeframe must resolve from ' +
-        `https://registry.npmjs.org/ (found ${JSON.stringify(locked.resolved)}); ` +
-        'file:/link:/workspace installs are not allowed.',
-    )
-  }
-}
-
 async function ensureInstalled() {
   if (isInstallCurrent()) {
     log('dependencies already installed for the current lockfile; skipping npm ci')
     return
   }
-  log('installing examples/test-app dependencies from the public registry (npm ci)')
+  log('installing examples/test-app dependencies (npm ci, lockfile-driven)')
   const exitCode = await runNpmToCompletion(
     ['ci', '--no-audit', '--no-fund', '--loglevel=error'],
     projectDir,
@@ -302,10 +399,11 @@ async function ensureInstalled() {
   if (exitCode !== 0) {
     fail(
       `npm ci in examples/test-app failed with exit code ${exitCode}. Ensure the ` +
-        'registry is reachable and the committed package-lock.json is in sync.',
+        'committed package-lock.json is in sync and the registry is reachable.',
     )
   }
-  assertInstalledRuneframe()
+  assertNoLocalCopies()
+  assertDeclaredPackagesInstalled()
   writeStamp()
   log('install complete (lockfile stamp written)')
 }
@@ -316,8 +414,12 @@ async function main() {
   log(`mode: ${checkMode ? 'check (typecheck + tests)' : 'launch (smoke + interactive app)'}`)
 
   assertProjectManifest()
+  assertLocalSource()
+  assertLockHasNoPublishedRuneframe()
   await ensureInstalled()
-  assertInstalledRuneframe()
+  assertNoLocalCopies()
+  assertDeclaredPackagesInstalled()
+  assertRootSingletonResolution()
 
   if (checkMode) {
     const typecheckCode = await runNpmToCompletion(['run', 'typecheck'], projectDir)

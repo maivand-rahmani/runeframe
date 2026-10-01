@@ -8,20 +8,22 @@ import {
 } from './FrameworkProvider.js'
 import { ScreenRegistry } from './screens/registry.js'
 import { useTheme } from './design-system/ThemeProvider.js'
-import { useKeyboardScope } from './interaction/KeyboardScopeProvider.js'
-import { useFocusGroup, useFocusable } from './interaction/FocusTreeProvider.js'
+import { useKeyboardScope } from './interaction/keyboard/KeyboardScopeProvider.js'
+import { useFocusGroup, useFocusable } from './interaction/focus/FocusTreeProvider.js'
 import {
   useRegisterActions,
   useScopedActionRegistry,
-} from './commands/ScopedActionRegistryProvider.js'
+} from './commands/actions/ScopedActionRegistryProvider.js'
 import { useNavigation } from './navigation/NavigationProvider.js'
-import { useModal } from './components/ModalProvider.js'
-import { useToast } from './components/ToastProvider.js'
-import { HotkeyHintBar } from './components/HotkeyHintBar.js'
-import { ConfirmModal } from './components/ConfirmModal.js'
-import { List, type ListItem } from './components/List.js'
-import { MouseArea, type MouseClickEvent } from './interaction/MouseArea.js'
-import { useMouseRegistry } from './interaction/MouseProvider.js'
+import { useModal } from './components/overlays/ModalProvider.js'
+import { useToast } from './components/feedback/ToastProvider.js'
+import { HotkeyHintBar } from './commands/ui/HotkeyHintBar.js'
+import { ConfirmModal } from './components/overlays/ConfirmModal.js'
+import { List, type ListItem } from './components/selection/List.js'
+import { MouseArea, type MouseClickEvent } from './interaction/mouse/MouseArea.js'
+import { useMouseRegistry } from './interaction/mouse/MouseProvider.js'
+import type { MouseEventSource } from './interaction/mouse/MouseEventSource.js'
+import type { NormalizedMouseEvent } from './interaction/mouse/SgrMouseStreamParser.js'
 
 const registry = new ScreenRegistry()
 registry.register({
@@ -295,6 +297,70 @@ describe('FrameworkProvider', () => {
     await delay()
 
     expect(clicks).toEqual([{ x: 4, y: 2 }])
+  })
+
+  it('forwards mouseEventSource to MouseProvider and routes source clicks', async () => {
+    const clicks: MouseClickEvent[] = []
+    const listeners = new Set<(event: NormalizedMouseEvent) => void>()
+    const source: MouseEventSource = {
+      subscribe(listener) {
+        listeners.add(listener)
+        return () => {
+          listeners.delete(listener)
+        }
+      },
+    }
+
+    function MouseHost() {
+      return React.createElement(
+        MouseArea,
+        {
+          bounds: { x: 3, y: 1, width: 3, height: 2 },
+          onClick: (event: MouseClickEvent) => clicks.push(event),
+        },
+        React.createElement(Text, null, 'source target'),
+      )
+    }
+
+    const { lastFrame } = render(
+      React.createElement(
+        FrameworkProvider,
+        {
+          registry,
+          defaultScreen: 'home',
+          mouseEventSource: source,
+          children: React.createElement(MouseHost),
+        },
+      ),
+    )
+
+    await waitForFrame(lastFrame, 'source target')
+    expect(listeners.size).toBe(1)
+
+    const press: NormalizedMouseEvent = {
+      type: 'press',
+      button: 'left',
+      x: 3,
+      y: 1,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    }
+    const release: NormalizedMouseEvent = {
+      type: 'release',
+      button: 'left',
+      x: 3,
+      y: 1,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    }
+    for (const listener of [...listeners]) {
+      listener(press)
+      listener(release)
+    }
+
+    expect(clicks).toEqual([{ x: 3, y: 1 }])
   })
 
   it('routes mouse clicks to areas rendered inside modal content', async () => {

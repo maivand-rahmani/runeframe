@@ -1,4 +1,4 @@
-import type { ProcessRunner, RunningProcess } from '../src/commands/ProcessRunner.js'
+import type { ProcessRunner, RunningProcess } from '../src/commands/process/ProcessRunner.js'
 
 /**
  * Mock `ProcessRunner` for CI-safe integration tests.

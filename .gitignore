@@ -6,3 +6,10 @@ coverage/
 .idea/
 .vscode/
 .slim/deepwork/
+tests/native/**/bin/
+tests/native/**/obj/
+src/input/transports/windows/native/bin/
+src/input/transports/windows/native/obj/
+# Generated NativeAOT publish output (produced by `npm run build:native-windows`,
+# staged into dist/ by `npm run stage:native-windows`); never committed.
+src/input/transports/windows/binaries/

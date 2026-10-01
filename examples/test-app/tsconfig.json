@@ -4,6 +4,11 @@
     "lib": ["ES2023"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "paths": {
+      "runeframe": ["../../src/index.ts"],
+      "runeframe/experimental": ["../../src/experimental/index.ts"],
+      "runeframe/windows-input": ["../../src/input/transports/windows/index.ts"]
+    },
     "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
@@ -20,6 +25,8 @@
     "src/**/*.tsx",
     "tests/**/*.ts",
     "tests/**/*.tsx",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "../../src/**/*.ts",
+    "../../src/**/*.tsx"
   ]
 }

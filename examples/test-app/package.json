@@ -2,7 +2,7 @@
   "name": "runeframe-test-app",
   "version": "0.0.0",
   "private": true,
-  "description": "Interactive Runeframe feature showcase consuming the published runeframe@0.5.0 package.",
+  "description": "Interactive Runeframe feature showcase consuming the local repository source entries (src/index.ts, src/experimental/index.ts, and the Windows input transport at src/input/transports/windows/index.ts) with the root React/Ink install.",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
@@ -13,14 +13,9 @@
     "test": "vitest run",
     "smoke": "vitest run tests/showcase-app.test.tsx"
   },
-  "dependencies": {
-    "ink": "^7.0.2",
-    "react": "^19.2.5",
-    "runeframe": "0.5.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "@types/react": "^19.2.14",
     "ink-testing-library": "^4.0.0",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",

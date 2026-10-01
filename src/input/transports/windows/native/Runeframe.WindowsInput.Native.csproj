@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Production Windows record-input host: the physically proven
+    ReadConsoleInputW fallback. It owns CONIN$ as the single console-input
+    reader, applies ConsoleModePolicy and streams Protocol JSON lines on
+    stdout. stdin must be a control pipe ('stop' / EOF).
+
+    This project compiles the shared record core only: no VT experiment, no
+    self-test harnesses, no counters and no debug telemetry. The test-app
+    links the same shared sources instead of duplicating them.
+
+    Build (Phase 1, no C++ toolchain needed):
+      dotnet build -c Release
+
+    Phase 2 (NativeAOT, not required yet; needs the VS Desktop C++ workload):
+      dotnet publish -c Release -r win-x64   -p:PublishAot=true -p:SelfContained=true
+      dotnet publish -c Release -r win-arm64 -p:PublishAot=true -p:SelfContained=true
+
+    The protocol serializer is hand-escaped (no reflection-based JSON), so the
+    host stays trim/AOT friendly; P/Invoke and blittable-struct marshalling are
+    AOT-compatible. Phase 2 must still verify the published artifacts.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Runeframe.Win32Input</AssemblyName>
+    <RootNamespace>Runeframe.Win32Input</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- NativeAOT stays opt-in so the normal Release build needs no C++ toolchain. -->
+    <PublishAot Condition="'$(PublishAot)' == ''">false</PublishAot>
+  </PropertyGroup>
+
+</Project>

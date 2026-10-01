@@ -1,18 +1,19 @@
 import { useState, useCallback, useRef, useEffect, type ReactNode } from 'react'
 import { Box, Text } from 'ink'
-import { useKeyHandler } from '../interaction/useKeyHandler.js'
+import { useKeyHandler } from '../interaction/keyboard/useKeyHandler.js'
 import { InputConsumptionResult } from '../types.js'
-import { MouseLayout } from '../interaction/MouseLayout.js'
-import { useAutoMouseArea } from '../interaction/useAutoMouseArea.js'
-import { useMouseGeometry } from '../interaction/MouseGeometryContext.js'
-import { useMouseRegistry } from '../interaction/MouseProvider.js'
+import { MouseLayout } from '../interaction/mouse/MouseLayout.js'
+import { useAutoMouseArea } from '../interaction/mouse/useAutoMouseArea.js'
+import { useMouseGeometry } from '../interaction/mouse/MouseGeometryContext.js'
+import { useMouseRegistry } from '../interaction/mouse/MouseProvider.js'
+import { semanticColors } from '../design-system/tokens.js'
 
 function StepActionTarget({
   onClick,
   children,
 }: {
   onClick: () => void
-  children: ReactNode
+  children: (hovered: boolean) => ReactNode
 }) {
   const geometry = useMouseGeometry()
   const registry = useMouseRegistry()
@@ -22,7 +23,7 @@ function StepActionTarget({
     geometry.clip !== null &&
     registry !== null
 
-  if (!hasMeasuredMouseHost) return children
+  if (!hasMeasuredMouseHost) return children(false)
 
   return <MeasuredStepAction onClick={onClick}>{children}</MeasuredStepAction>
 }
@@ -32,12 +33,17 @@ function MeasuredStepAction({
   children,
 }: {
   onClick: () => void
-  children: ReactNode
+  children: (hovered: boolean) => ReactNode
 }) {
-  const ref = useAutoMouseArea({ onClick })
+  const [hovered, setHovered] = useState(false)
+  const ref = useAutoMouseArea({
+    onClick,
+    onEnter: () => setHovered(true),
+    onLeave: () => setHovered(false),
+  })
   return (
     <MouseLayout ref={ref} flexDirection="row">
-      {children}
+      {children(hovered)}
     </MouseLayout>
   )
 }
@@ -197,19 +203,41 @@ export function StepFlow({
       <MouseLayout>
         {isFirst ? (
           <StepActionTarget onClick={goBack}>
-            <Text dimColor>[esc] Cancel</Text>
+            {(hovered) => (
+              <Text
+                color={hovered ? semanticColors.focus.ring : undefined}
+                dimColor={!hovered}
+                underline={hovered}
+              >
+                [esc] Cancel
+              </Text>
+            )}
           </StepActionTarget>
         ) : (
           <StepActionTarget onClick={goBack}>
-            <Text dimColor>[←] Back</Text>
+            {(hovered) => (
+              <Text
+                color={hovered ? semanticColors.focus.ring : undefined}
+                dimColor={!hovered}
+                underline={hovered}
+              >
+                [←] Back
+              </Text>
+            )}
           </StepActionTarget>
         )}
         <Text> </Text>
         <StepActionTarget onClick={goNext}>
-          <Text dimColor>
-            [→{isLast || steps.length === 0 ? '' : '/Enter'}]{' '}
-            {isLast ? 'Finish' : 'Next'}
-          </Text>
+          {(hovered) => (
+            <Text
+              color={hovered ? semanticColors.focus.ring : undefined}
+              dimColor={!hovered}
+              underline={hovered}
+            >
+              [→{isLast || steps.length === 0 ? '' : '/Enter'}]{' '}
+              {isLast ? 'Finish' : 'Next'}
+            </Text>
+          )}
         </StepActionTarget>
       </MouseLayout>
     </MouseLayout>

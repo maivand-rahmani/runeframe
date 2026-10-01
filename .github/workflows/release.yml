@@ -12,7 +12,229 @@ permissions:
   id-token: write
 
 jobs:
+  native-windows:
+    name: NativeAOT Windows helper (win-x64 + win-arm64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install
+        run: npm ci
+
+      - name: Ensure Visual Studio Desktop C++ and ARM64 toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # `vswhere -requires` only reports installer registration; it can
+          # claim the C++ toolchain is present while vcvarsall.bat / cl.exe /
+          # link.exe are missing on disk. Every decision below therefore probes
+          # the real files, and the installer runs only when a file is absent.
+          $programFilesX86 = ${env:ProgramFiles(x86)}
+          $installerDir = Join-Path $programFilesX86 'Microsoft Visual Studio\Installer'
+          $vswhere = Join-Path $installerDir 'vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) {
+            Write-Host '::error::vswhere.exe not found; no Visual Studio installation detected on this runner.'
+            exit 1
+          }
+
+          function Find-MsvcTargetDir {
+            param([string] $InstallPath, [string] $Target)
+            $msvcRoot = Join-Path $InstallPath 'VC\Tools\MSVC'
+            if (-not (Test-Path -LiteralPath $msvcRoot)) { return $null }
+            foreach ($versionDir in (Get-ChildItem -LiteralPath $msvcRoot -Directory | Sort-Object Name -Descending)) {
+              $targetDir = Join-Path $versionDir.FullName "bin\Hostx64\$Target"
+              if ((Test-Path -LiteralPath (Join-Path $targetDir 'cl.exe')) -and (Test-Path -LiteralPath (Join-Path $targetDir 'link.exe'))) {
+                return $targetDir
+              }
+            }
+            return $null
+          }
+
+          function Test-WindowsSdk {
+            foreach ($kitsRoot in @((Join-Path $programFilesX86 'Windows Kits\10'), (Join-Path ${env:ProgramFiles} 'Windows Kits\10'))) {
+              if (-not (Test-Path -Path (Join-Path $kitsRoot 'Include\10.*\um\windows.h'))) { continue }
+              $libsPresent = $true
+              foreach ($arch in @('x64', 'arm64')) {
+                if (-not (Test-Path -Path (Join-Path $kitsRoot "Lib\10.*\um\$arch\kernel32.lib"))) { $libsPresent = $false }
+              }
+              if ($libsPresent) { return $true }
+            }
+            return $false
+          }
+
+          function Get-MissingToolchainFiles {
+            param([string] $InstallPath)
+            $missing = @()
+            $vcvars = Join-Path $InstallPath 'VC\Auxiliary\Build\vcvarsall.bat'
+            if (-not (Test-Path -LiteralPath $vcvars)) { $missing += $vcvars }
+            foreach ($target in @('x64', 'arm64')) {
+              if ($null -eq (Find-MsvcTargetDir -InstallPath $InstallPath -Target $target)) {
+                $missing += (Join-Path $InstallPath "VC\Tools\MSVC\<version>\bin\Hostx64\$target\{cl.exe,link.exe}")
+              }
+            }
+            if (-not (Test-WindowsSdk)) {
+              $missing += 'Windows Kits\10\Include\10.*\um\windows.h and Lib\10.*\um\{x64,arm64}\kernel32.lib'
+            }
+            return $missing
+          }
+
+          $instances = @(
+            & $vswhere -products * -property installationPath |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+              ForEach-Object { $_.Trim() }
+          )
+          if ($instances.Count -eq 0) {
+            Write-Host '::error::No Visual Studio instance found on this runner; cannot provision the NativeAOT C++ toolchain.'
+            exit 1
+          }
+
+          foreach ($candidate in $instances) {
+            if ((Get-MissingToolchainFiles -InstallPath $candidate).Count -eq 0) {
+              Write-Host "NativeAOT prerequisites verified on disk in: $candidate"
+              exit 0
+            }
+          }
+
+          $instance = & $vswhere -latest -products * -property installationPath | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($instance)) { $instance = $instances[0] } else { $instance = $instance.Trim() }
+          Write-Host 'Missing NativeAOT toolchain files:'
+          Get-MissingToolchainFiles -InstallPath $instance | ForEach-Object { Write-Host "  - $_" }
+
+          $setup = Join-Path $installerDir 'setup.exe'
+          if (-not (Test-Path -LiteralPath $setup)) {
+            $setup = Join-Path $installerDir 'vs_installer.exe'
+          }
+          if (-not (Test-Path -LiteralPath $setup)) {
+            Write-Host '::error::Visual Studio installer (setup.exe / vs_installer.exe) not found; cannot modify the Visual Studio installation.'
+            exit 1
+          }
+
+          # setup.exe rejects the `--wait` flag, so it is never passed; wait on
+          # the process instead, bounded so a hung installer cannot burn the
+          # whole job timeout.
+          $components = @(
+            'Microsoft.VisualStudio.Workload.NativeDesktop',
+            'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+            'Microsoft.VisualStudio.Component.VC.Tools.ARM64',
+            'Microsoft.VisualStudio.Component.Windows11SDK.26100'
+          )
+          $installerArgs = @('modify', '--installPath', ('"' + $instance + '"'), '--quiet', '--norestart')
+          foreach ($component in $components) { $installerArgs += @('--add', $component) }
+
+          Write-Host "Installing missing Visual Studio components: $($components -join ', ')"
+          $timeoutMs = 25 * 60 * 1000
+          $process = Start-Process -FilePath $setup -ArgumentList ($installerArgs -join ' ') -PassThru -NoNewWindow
+          if (-not $process.WaitForExit($timeoutMs)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            Write-Host '::error::Visual Studio installer did not finish within 25 minutes; aborting instead of hanging the job.'
+            exit 1
+          }
+          $exitCode = $process.ExitCode
+          Write-Host "Visual Studio installer exit code: $exitCode"
+
+          # setup.exe can hand off to a background vs_installer process; give it
+          # a bounded settle window before the file probe is treated as final.
+          $settleDeadline = (Get-Date).AddMinutes(5)
+          while (
+            (Get-MissingToolchainFiles -InstallPath $instance).Count -gt 0 -and
+            (Get-Date) -lt $settleDeadline -and
+            (Get-Process -Name 'vs_installer' -ErrorAction SilentlyContinue)
+          ) {
+            Start-Sleep -Seconds 10
+          }
+
+          # The installer exit code is ambiguous (reboot codes, partial
+          # installs), so the on-disk file probe decides the outcome.
+          $missing = Get-MissingToolchainFiles -InstallPath $instance
+          if ($missing.Count -eq 0) {
+            Write-Host "NativeAOT prerequisites verified on disk after installer run: $instance"
+            exit 0
+          }
+
+          Write-Host "::error::Visual Studio C++ toolchain is still incomplete after the installer run (exit code $exitCode). Missing files:"
+          $missing | ForEach-Object { Write-Host "  - $_" }
+          Write-Host '::error::Install Microsoft.VisualStudio.Workload.NativeDesktop plus the x64/ARM64 MSVC toolsets and a Windows 10/11 SDK on the runner image.'
+          exit 1
+
+      - name: Build NativeAOT Windows helper
+        run: npm run build:native-windows
+
+      - name: Verify NativeAOT executables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Get-PeMachine {
+            param([string] $Path)
+            $bytes = [System.IO.File]::ReadAllBytes($Path)
+            if ($bytes.Length -lt 64) { return 0 }
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+            if ($peOffset -lt 0 -or ($peOffset + 6) -gt $bytes.Length) { return 0 }
+            if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45) { return 0 }
+            return [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          }
+
+          $expected = [ordered]@{
+            'src/input/transports/windows/binaries/win-x64/Runeframe.Win32Input.exe'   = 0x8664
+            'src/input/transports/windows/binaries/win-arm64/Runeframe.Win32Input.exe' = 0xAA64
+          }
+
+          foreach ($target in $expected.GetEnumerator()) {
+            $path = $target.Key
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              Write-Host "::error::Missing NativeAOT executable: $path"
+              exit 1
+            }
+            $file = Get-Item -LiteralPath $path
+            if ($file.Length -lt 1MB) {
+              Write-Host "::error::$path is only $($file.Length) bytes; expected a self-contained NativeAOT executable (>= 1 MiB), not a framework-dependent apphost."
+              exit 1
+            }
+            $machine = Get-PeMachine -Path $file.FullName
+            if ($machine -ne $target.Value) {
+              Write-Host ("::error::{0} has PE machine 0x{1:X4}; expected 0x{2:X4} for its RID." -f $path, $machine, $target.Value)
+              exit 1
+            }
+            Write-Host ("OK: {0} ({1:N2} MiB, PE machine 0x{2:X4})" -f $path, ($file.Length / 1MB), $machine)
+          }
+
+      - name: Upload win-x64 NativeAOT executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: runeframe-win32input-win-x64
+          path: src/input/transports/windows/binaries/win-x64/Runeframe.Win32Input.exe
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload win-arm64 NativeAOT executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: runeframe-win32input-win-arm64
+          path: src/input/transports/windows/binaries/win-arm64/Runeframe.Win32Input.exe
+          if-no-files-found: error
+          retention-days: 3
+
   release:
+    needs: native-windows
     runs-on: ubuntu-latest
 
     steps:
@@ -30,6 +252,53 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Remove stale source AOT assets
+        # The publish output is git-ignored, but a pre-populated runner could
+        # still carry stale files; start empty so only freshly downloaded CI
+        # artifacts can reach the published tarball.
+        run: rm -rf src/input/transports/windows/binaries
+
+      - name: Download win-x64 NativeAOT executable
+        uses: actions/download-artifact@v4
+        with:
+          name: runeframe-win32input-win-x64
+          path: src/input/transports/windows/binaries/win-x64
+
+      - name: Download win-arm64 NativeAOT executable
+        uses: actions/download-artifact@v4
+        with:
+          name: runeframe-win32input-win-arm64
+          path: src/input/transports/windows/binaries/win-arm64
+
+      - name: Verify downloaded AOT assets (exact, non-empty)
+        # Deep validation (PE32+ machine per RID, sidecar-free publish, tarball
+        # contents) happens in `npm run pack:check` -> stage:native-windows;
+        # this step only guards that the exact downloaded executables arrived.
+        run: |
+          set -euo pipefail
+          root='src/input/transports/windows/binaries'
+
+          for arch in win-x64 win-arm64; do
+            dir="$root/$arch"
+            exe="$dir/Runeframe.Win32Input.exe"
+
+            [ -f "$exe" ] || {
+              echo "::error::Missing downloaded AOT executable $exe"
+              find "$root" -maxdepth 6 -type f 2>/dev/null || true
+              exit 1
+            }
+            [ -s "$exe" ] || { echo "::error::AOT executable is empty: $exe"; exit 1; }
+
+            count=$(find "$dir" -type f | wc -l | tr -d '[:space:]')
+            [ "$count" = "1" ] || {
+              echo "::error::$dir must contain exactly the downloaded executable; found $count file(s):"
+              find "$dir" -type f
+              exit 1
+            }
+
+            echo "OK: $exe ($(stat -c %s "$exe") bytes; PE check runs in pack:check)"
+          done
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -41,6 +310,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Packed consumer check (both NativeAOT executables)
+        run: npm run pack:check
 
       - name: Upload integration evidence
         if: always()

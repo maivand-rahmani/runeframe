@@ -1,5 +1,12 @@
 # runeframe
 
+## 0.5.3
+
+### Patch Changes
+
+- Add composable, deeply merged theme overrides for app-wide and nested providers, including density presets, symbols, layout tokens, per-component overrides, and typed extension data.
+- Migrate built-in components to consume theme tokens while preserving the existing default appearance and interaction behavior; add a Theme Studio to the test app.
+
 ## 0.5.1
 
 ### Patch Changes

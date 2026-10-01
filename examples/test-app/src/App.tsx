@@ -78,12 +78,14 @@ type ThemeMode = 'dark' | 'light'
 type StudioPaletteId = 'cinder' | 'tide' | 'fern'
 type StudioDensity = 'compact' | 'comfortable' | 'spacious'
 type StudioSymbolSet = 'signal' | 'classic'
+type StudioLayout = 'balanced' | 'expanded'
 
 interface StudioThemeExtensions {
   studio: {
     palette: StudioPaletteId
     density: StudioDensity
     symbolSet: StudioSymbolSet
+    layout: StudioLayout
     preview: string
   }
 }
@@ -96,6 +98,8 @@ interface ThemeStudioState {
   setDensity: (density: StudioDensity) => void
   symbolSet: StudioSymbolSet
   setSymbolSet: (symbolSet: StudioSymbolSet) => void
+  layout: StudioLayout
+  setLayout: (layout: StudioLayout) => void
 }
 
 const ThemeStudioContext = createContext<ThemeStudioState | null>(null)
@@ -127,7 +131,7 @@ const studioPalettes: Record<StudioPaletteId, {
     dark: {
       text: { primary: 'white', secondary: 'cyan', muted: 'gray', inverse: 'black' },
       status: { success: 'green', warning: 'yellow', error: 'red', info: 'blue' },
-      focus: { ring: 'cyan', active: 'blue', selected: 'cyan' },
+      focus: { ring: 'cyan', active: 'cyan', selected: 'blue' },
       surface: { base: 'black', elevated: 'blue', overlay: 'black' },
       border: { default: 'blue', focus: 'cyan', error: 'red' },
     },
@@ -155,6 +159,23 @@ const studioPalettes: Record<StudioPaletteId, {
       surface: { base: 'white', elevated: 'green', overlay: 'white' },
       border: { default: 'green', focus: 'green', error: 'red' },
     },
+  },
+}
+
+// These presets alter actual framework layout tokens while preserving the
+// familiar frame as the default. The wider profile is useful on large TTYs;
+// it never changes the app's responsive breakpoint or any interaction target.
+const studioLayouts: Record<StudioLayout, {
+  label: string
+  layout: NonNullable<ThemeOverrides['layout']>
+}> = {
+  balanced: {
+    label: 'Balanced',
+    layout: { sidebarWidth: 20, dividerWidth: 28, listMaxVisible: 10 },
+  },
+  expanded: {
+    label: 'Expanded',
+    layout: { sidebarWidth: 24, dividerWidth: 36, listMaxVisible: 12 },
   },
 }
 
@@ -189,18 +210,39 @@ function buildStudioTheme(
   palette: StudioPaletteId,
   density: StudioDensity,
   symbolSet: StudioSymbolSet,
+  layout: StudioLayout,
   mode: ThemeMode,
 ): ThemeOverrides {
   const selectedPalette = studioPalettes[palette]
+  const colors = mode === 'dark' ? selectedPalette.dark : selectedPalette.light
   return {
-    colors: mode === 'dark' ? selectedPalette.dark : selectedPalette.light,
+    colors,
     density,
     symbols: studioSymbolProfiles[symbolSet],
+    layout: studioLayouts[layout].layout,
+    components: {
+      button: {
+        colors: {
+          primary: colors.focus?.active ?? 'cyan',
+          focused: colors.focus?.ring ?? 'cyan',
+          hovered: colors.focus?.ring ?? 'cyan',
+        },
+      },
+      panel: {
+        colors: {
+          border: colors.border?.default ?? 'gray',
+          title: colors.focus?.active ?? 'cyan',
+        },
+        spacing: { titleMarginBottom: 0 },
+        borderStyle: 'round',
+      },
+    },
     extensions: {
       studio: {
         palette,
         density,
         symbolSet,
+        layout,
         preview: 'shared preview',
       },
     },
@@ -436,11 +478,12 @@ export function ShowcaseApp({
   mouseEventSource,
 }: ShowcaseAppProps = {}) {
   const [themeMode, setThemeMode] = useState<ThemeMode>('dark')
-  const [studioPalette, setStudioPalette] = useState<StudioPaletteId>('cinder')
+  const [studioPalette, setStudioPalette] = useState<StudioPaletteId>('fern')
   const [studioDensity, setStudioDensity] =
     useState<StudioDensity>('comfortable')
   const [studioSymbolSet, setStudioSymbolSet] =
     useState<StudioSymbolSet>('signal')
+  const [studioLayout, setStudioLayout] = useState<StudioLayout>('balanced')
   const toggleTheme = useCallback(() => {
     setThemeMode((mode) => (mode === 'dark' ? 'light' : 'dark'))
   }, [])
@@ -450,9 +493,10 @@ export function ShowcaseApp({
         studioPalette,
         studioDensity,
         studioSymbolSet,
+        studioLayout,
         themeMode,
       ),
-    [studioDensity, studioPalette, studioSymbolSet, themeMode],
+    [studioDensity, studioLayout, studioPalette, studioSymbolSet, themeMode],
   )
   const themeStudioState = useMemo(
     () => ({
@@ -463,8 +507,10 @@ export function ShowcaseApp({
       setDensity: setStudioDensity,
       symbolSet: studioSymbolSet,
       setSymbolSet: setStudioSymbolSet,
+      layout: studioLayout,
+      setLayout: setStudioLayout,
     }),
-    [studioDensity, studioPalette, studioSymbolSet, themeMode],
+    [studioDensity, studioLayout, studioPalette, studioSymbolSet, themeMode],
   )
 
   return (
@@ -863,8 +909,10 @@ function MouseDemoTopBar({
           >
             <Text
               bold
-              color={hovered ? theme.colors.text.inverse : theme.colors.text.primary}
-              backgroundColor={hovered ? theme.colors.status.info : undefined}
+              color={theme.colors.text.inverse}
+              backgroundColor={
+                hovered ? theme.colors.status.info : theme.colors.focus.active
+              }
               underline={hovered}
             >
               {brandText}
@@ -1122,16 +1170,26 @@ function MeasuredPanel({
   children: ReactNode
 }) {
   const theme = useTheme()
+  const panel = theme.components.panel
   return (
     <MouseLayout
-      borderStyle={theme.borderStyles.panel as 'round'}
-      borderColor={theme.colors.border.default}
+      borderStyle={
+        (panel?.borderStyle ?? theme.borderStyles.panel) as 'round'
+      }
+      borderColor={panel?.colors?.border ?? theme.colors.border.default}
       flexDirection="column"
-      paddingX={theme.spacing.sm}
+      paddingX={panel?.spacing?.paddingX ?? theme.spacing.sm}
     >
       {title != null && (
-        <MouseLayout marginBottom={theme.spacing.xs}>
-          <Text bold>{title}</Text>
+        <MouseLayout
+          marginBottom={panel?.spacing?.titleMarginBottom ?? theme.spacing.xs}
+        >
+          <Text
+            bold={theme.typography.heading === 'bold'}
+            color={panel?.colors?.title ?? theme.colors.text.primary}
+          >
+            {theme.symbols.list.marker} {title}
+          </Text>
         </MouseLayout>
       )}
       {children}
@@ -1140,25 +1198,45 @@ function MeasuredPanel({
 }
 
 function OverviewScreen() {
-  const theme = useTheme()
+  const theme = useTheme<StudioThemeExtensions>()
   const { push } = useNavigation()
+  const extension = theme.extensions.studio
 
   return (
     <MouseLayout flexDirection="column">
-      <MouseLayout marginBottom={1}>
+      <MouseLayout
+        flexDirection="row"
+        justifyContent="space-between"
+        marginBottom={theme.spacing.xs}
+      >
         <Text bold color={theme.colors.focus.active}>
           MAINTAINER BENCH
         </Text>
-        <Text color={theme.colors.text.muted}>  /  v0.5.1</Text>
+        <Badge variant="success" compact>READY</Badge>
+      </MouseLayout>
+      <MouseLayout
+        flexDirection="row"
+        flexWrap="wrap"
+        marginBottom={theme.spacing.xs}
+      >
+        <Text color={theme.colors.text.muted}>THEME / </Text>
+        <Text bold color={theme.colors.focus.active}>
+          {studioPalettes[extension.palette].label.toUpperCase()}
+        </Text>
+        <Text color={theme.colors.text.muted}>
+          {'  · '}
+          {extension.density.toUpperCase()} · {extension.symbolSet.toUpperCase()} ·{' '}
+          {extension.layout.toUpperCase()}
+        </Text>
       </MouseLayout>
       <Text bold color={theme.colors.text.primary}>
-        Public surface, in motion.
+        Build a better terminal workflow.
       </Text>
       <Text color={theme.colors.text.secondary}>
-        A compact test bench for routes, controls, keyboard scope, and real process output.
+        Routes, controls, and real process output—ready to explore.
       </Text>
 
-      <MouseLayout marginTop={1}>
+      <MouseLayout marginTop={theme.spacing.xs}>
         <MeasuredPanel title="START / choose a track">
           <MouseLayout flexDirection="column">
             <Button variant="ghost" onActivate={() => push('controls')}>
@@ -1174,7 +1252,7 @@ function OverviewScreen() {
               04  Input lab · Focus, keys, and mouse
             </Button>
           </MouseLayout>
-          <MouseLayout marginTop={1} flexDirection="row" flexWrap="wrap" gap={1}>
+          <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
             <Button
               variant="primary"
               onActivate={() => push('controls')}
@@ -1188,11 +1266,6 @@ function OverviewScreen() {
         </MeasuredPanel>
       </MouseLayout>
 
-      <MouseLayout marginTop={1}>
-        <Text color={theme.colors.text.muted}>
-          [1–4] push a route  ·  [b] pop  ·  [0] replace with overview
-        </Text>
-      </MouseLayout>
     </MouseLayout>
   )
 }
@@ -1214,8 +1287,12 @@ function ThemeStudioChoice({
   onActivate: () => void
   children: ReactNode
 }) {
+  const theme = useTheme()
   return (
     <Button variant={active ? 'primary' : 'ghost'} onActivate={onActivate}>
+      <Text color={active ? theme.colors.focus.active : theme.colors.text.muted}>
+        {active ? theme.symbols.radioList.selected : theme.symbols.radioList.unselected}
+      </Text>{' '}
       {children}
     </Button>
   )
@@ -1230,18 +1307,20 @@ function ThemeStudioScreen() {
     setDensity,
     symbolSet,
     setSymbolSet,
+    layout,
+    setLayout,
   } = useThemeStudioState()
   const theme = useTheme<StudioThemeExtensions>()
   const extension = theme.extensions.studio
 
   return (
     <MouseLayout flexDirection="column">
-      <MouseLayout marginBottom={1}>
+      <MouseLayout marginBottom={theme.spacing.xs}>
         <Text bold color={theme.colors.focus.active}>THEME STUDIO / TOKENS</Text>
-        <Text color={theme.colors.text.muted}>  /  shared tokens · local preview</Text>
+        <Text color={theme.colors.text.muted}>  /  app-wide tokens · nested override</Text>
       </MouseLayout>
 
-      <MouseLayout marginTop={1} flexDirection="row" flexWrap="wrap" gap={1}>
+      <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
         <Text bold color={theme.colors.text.muted}>PALETTE</Text>
         {(Object.keys(studioPalettes) as StudioPaletteId[]).map((id) => (
           <ThemeStudioChoice
@@ -1283,15 +1362,29 @@ function ThemeStudioScreen() {
         </ThemeStudioChoice>
       </MouseLayout>
 
-      <MouseLayout marginTop={1} flexDirection="row" flexWrap="wrap" gap={1}>
+      <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
+        <Text bold color={theme.colors.text.muted}>FRAME</Text>
+        {(Object.keys(studioLayouts) as StudioLayout[]).map((id) => (
+          <ThemeStudioChoice
+            key={id}
+            active={layout === id}
+            onActivate={() => setLayout(id)}
+          >
+            {studioLayouts[id].label}
+          </ThemeStudioChoice>
+        ))}
+      </MouseLayout>
+
+      <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
         <Text color={theme.colors.text.primary}>
           palette: {studioPalettes[extension.palette].label}
         </Text>
         <Text color={theme.colors.focus.active}>density: {extension.density}</Text>
         <Text color={theme.colors.text.primary}>symbols: {extension.symbolSet}</Text>
+        <Text color={theme.colors.text.primary}>frame: {extension.layout}</Text>
       </MouseLayout>
 
-      <MouseLayout marginTop={1}>
+      <MouseLayout>
         <LocalThemePreview mode={mode} />
       </MouseLayout>
     </MouseLayout>
@@ -1306,6 +1399,14 @@ function LocalThemePreview({ mode }: { mode: ThemeMode }) {
         colors: {
           focus: { active: 'magenta', ring: 'magenta' },
           border: { default: 'magenta', focus: 'magenta' },
+        },
+        components: {
+          button: { colors: { primary: 'magenta' } },
+          panel: {
+            colors: { border: 'magenta', title: 'magenta' },
+            spacing: { paddingX: 2, titleMarginBottom: 0 },
+            borderStyle: 'double',
+          },
         },
         extensions: {
           studio: { preview: 'local-focus / plum' },
@@ -1324,6 +1425,9 @@ function LocalThemePreviewContent() {
 
   return (
     <MeasuredPanel title="LOCAL PREVIEW / nested ThemeProvider">
+      <Text color={theme.colors.text.secondary}>
+        Plum focus + double frame are local; the palette and symbols still inherit.
+      </Text>
       <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
         <Text color={theme.colors.focus.active}>{extension.preview}</Text>
         <Badge variant="info" compact>{extension.palette.toUpperCase()}</Badge>

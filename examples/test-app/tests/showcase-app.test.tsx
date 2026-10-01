@@ -120,14 +120,22 @@ function setTtyRows(
   app: AppRender,
   rows: number,
   node: ReactElement = <ShowcaseApp />,
+  columns?: number,
 ): void {
   const stdout = app.stdout as unknown as {
     isTTY: boolean
+    columns: number
     rows: number
     emit: (event: 'resize') => void
   }
   app.stdin.isTTY = true
   stdout.isTTY = true
+  if (columns !== undefined) {
+    Object.defineProperty(stdout, 'columns', {
+      configurable: true,
+      value: columns,
+    })
+  }
   stdout.rows = rows
   stdout.emit('resize')
   // MouseProvider enables reporting only for a TTY. Re-render after marking
@@ -331,26 +339,37 @@ async function clickCell(
 }
 
 describe('ShowcaseApp package-consumer smoke', () => {
-  it('renders the composed shell with the overview route', async () => {
-    const app = renderApp()
-    await waitForFrame(app, 'RUNEFRAME / FEATURE LAB')
-    const frame = frameText(app)
+  it('renders the composed shell with the overview route', () =>
+    withColorOutput(async () => {
+      const app = renderApp()
+      setTtyRows(app, 24, undefined, 80)
+      await waitForFrame(app, 'RUNEFRAME / FEATURE LAB')
+      const frame = frameText(app)
 
-    expect(frame).toContain('MAINTAINER BENCH')
-    expect(frame).toContain('Public surface, in motion.')
-    expect(frame).toContain('START / choose a track')
-    expect(frame).toContain('Open control bench')
+      expect(frame).toContain('MAINTAINER BENCH')
+      expect(frame).toContain('Build a better terminal workflow.')
+      expect(frame).toContain('THEME / FERN')
+      expect(frame).toContain('COMFORTABLE · SIGNAL · BALANCED')
+      expect(frame).toContain('START / choose a track')
+      expect(frame).toContain('Open control bench')
+      expect(frameRowCount(app)).toBeLessThanOrEqual(24)
 
-    // Sidebar navigation from the local screen registry.
-    expect(frame).toContain('Overview')
-    expect(frame).toContain('Controls')
-    expect(frame).toContain('Workflow')
-    expect(frame).toContain('Process')
-    expect(frame).toContain('Input lab')
+      // Fern's green palette is already applied to the opening frame, not just
+      // exposed later in Theme Studio.
+      expect(app.lastFrame()).toContain('\u001b[32m')
+      expect(app.lastFrame()).toContain('\u001b[42m')
 
-    // Status bar reflects theme + route from the framework providers.
-    expect(frame).toContain('DARK / OVERVIEW')
-  })
+      // Sidebar navigation from the local screen registry.
+      expect(frame).toContain('Overview')
+      expect(frame).toContain('Controls')
+      expect(frame).toContain('Workflow')
+      expect(frame).toContain('Process')
+      expect(frame).toContain('Input lab')
+
+      // Status bar reflects theme + route from the framework providers.
+      expect(frame).toContain('DARK / OVERVIEW')
+    }),
+  )
 
   it('accepts mouse routing diagnostics without changing the initial route', async () => {
     const events: MouseRoutingDiagnostic[] = []
@@ -431,11 +450,19 @@ describe('ShowcaseApp package-consumer smoke', () => {
 
     await clickText(app, 'Theme Studio')
     await waitForFrame(app, 'THEME STUDIO / TOKENS')
-    await waitForFrame(app, 'palette: Cinder')
+    await waitForFrame(app, 'palette: Fern')
+    await waitForFrame(app, 'frame: balanced')
     await waitForFrame(app, 'local-focus / plum')
     await waitForFrame(app, 'inherits comfortable / signal')
     await waitForFrame(app, '[Preview action]')
     expect(frameRowCount(app)).toBeLessThanOrEqual(24)
+
+    // Frame presets alter the shared public layout tokens, then restore the
+    // opening frame before exercising the other theme controls.
+    await clickText(app, 'Expanded')
+    await waitForFrame(app, 'frame: expanded')
+    await clickText(app, 'Balanced')
+    await waitForFrame(app, 'frame: balanced')
 
     // These controls update the FrameworkProvider's shared theme, while the
     // nested preview keeps its local focus override and inherits the rest. The

@@ -1,5 +1,5 @@
 import { Text } from 'ink'
-import { useLayoutEffect, useRef, type ReactElement } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactElement } from 'react'
 import { useTheme } from '../../design-system/ThemeProvider.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import type { FocusScope } from '../../types.js'
@@ -119,6 +119,7 @@ export function Tabs({
           active={isActive}
           scope={scope}
           color={isActive ? colors.focus.active : colors.text.secondary}
+          hoverColor={colors.focus.ring}
           onChange={onChange}
         />
       ) : (
@@ -150,6 +151,7 @@ function TabMouseTarget({
   active,
   scope,
   color,
+  hoverColor,
   onChange,
 }: {
   id: string
@@ -157,17 +159,25 @@ function TabMouseTarget({
   active: boolean
   scope: FocusScope
   color: string
+  hoverColor: string
   onChange: (id: string) => void
 }) {
+  const [hovered, setHovered] = useState(false)
   const ref = useAutoMouseArea({
     scope,
     priority: 40,
     onClick: () => onChange(id),
+    onEnter: () => setHovered(true),
+    onLeave: () => setHovered(false),
   })
 
   return (
     <MouseLayout ref={ref}>
-      <Text bold={active} color={color}>
+      <Text
+        bold={active}
+        color={active ? color : hovered ? hoverColor : color}
+        underline={hovered}
+      >
         {label}
       </Text>
     </MouseLayout>

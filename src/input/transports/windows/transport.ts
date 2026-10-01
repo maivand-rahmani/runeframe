@@ -27,10 +27,13 @@ import {
  * the bounded stop wait cannot run its own console-mode restoration, and the
  * transport says so explicitly.
  *
- * Known limitation (unchanged, nonregression): motion/drag records are ignored
- * and do not disturb the tracked button state, so a drag release is only
- * reported when a press edge was seen first; horizontal wheel, right/middle
- * buttons and out-of-viewport points are ignored as before.
+ * Motion records are reported as SGR motion: a move with the left button held
+ * becomes the press-form `Cb = 32|modifiers`, a move with no button becomes
+ * `Cb = 35|modifiers` (hover), and a move with only other buttons is ignored.
+ * Motion never mutates the left press/release edge tracker, so a release is
+ * still reported only when a press edge was seen first (no synthesized press,
+ * release or click); horizontal wheel, right/middle buttons and
+ * out-of-viewport points remain ignored.
  */
 
 // ── Windows constants (wincon.h / winuser.h) ──────────────────────────
@@ -92,6 +95,18 @@ const SGR_CTRL = 16
 /** SGR wheel base codes for wheel up/down. */
 const SGR_WHEEL_UP = 64
 const SGR_WHEEL_DOWN = 65
+
+/** SGR motion base code while the left button is held: `32|modifiers`. */
+const SGR_MOTION = 32
+
+/**
+ * SGR motion base code for a move with no button held: `32|3` (3 is SGR's "no
+ * button" code), the xterm hover form.
+ */
+const SGR_NO_BUTTON_MOTION = 35
+
+/** Low word of `dwButtonState`; the high word is wheel delta, not buttons. */
+const WINDOWS_BUTTON_MASK = 0xffff
 
 /** Bounded repeat application so a malformed record cannot flood the stream. */
 export const MAX_KEY_REPEAT = 64
@@ -314,7 +329,11 @@ export function translateKeyEvent(
 // ── Mouse translation ─────────────────────────────────────────────────
 
 export interface MouseTranslationState {
-  /** `dwButtonState` from the previously processed record. */
+  /**
+   * `dwButtonState` from the previously processed non-motion record. Motion
+   * records deliberately do not update this, so the left press/release edge
+   * pairing is preserved exactly as before.
+   */
   previousButtons: number
 }
 
@@ -348,10 +367,15 @@ function sgrMouseReport(
 
 /**
  * Translate one helper mouse record into an SGR report, or `null` when the
- * record must be ignored (motion, right/middle buttons, horizontal wheel,
- * out-of-viewport coordinates). Left press/release and vertical wheel are
- * supported; motion tracking is intentionally left out initially, so a drag
- * release is only reported when a press edge was seen first.
+ * record must be ignored (motion with only other buttons held, right/middle
+ * button presses/releases, horizontal wheel, out-of-viewport coordinates).
+ *
+ * Left press/release edges and vertical wheel are reported as before. Motion
+ * is now reported as an SGR motion report (final `M`): `Cb = 32|modifiers`
+ * while the left button is held (drag) and `Cb = 35|modifiers` for hover with
+ * no button. Motion never synthesizes a press, a release or a click, and it
+ * does not mutate the button-edge tracker, so a drag release is still paired
+ * with the press edge that preceded the motion.
  */
 export function translateMouseEvent(
   event: HelperMouseEvent,
@@ -360,15 +384,24 @@ export function translateMouseEvent(
   const buttons = event.buttons >>> 0
   const previous = state.previousButtons >>> 0
   const flags = event.flags >>> 0
-  let report: string | null = null
+  const modifiers = sgrModifiers(event.control)
 
   if ((flags & WINDOWS_MOUSE_FLAGS.MOVED) !== 0) {
-    // Hover/drag motion is ignored for now and must not disturb the tracked
-    // button state, so press/release edges stay detectable.
+    // Motion is reported in press form and never as an edge: `32|modifiers`
+    // with the left button held, `35|modifiers` (no button) while hovering.
+    // Only other-button motion is ignored. The tracker is not updated here, so
+    // a hover cannot invent a click and a drag release still pairs with its
+    // press edge.
+    if ((buttons & WINDOWS_LEFT_BUTTON) !== 0) {
+      return sgrMouseReport(SGR_MOTION | modifiers, event, 'M')
+    }
+    if ((buttons & WINDOWS_BUTTON_MASK) === 0) {
+      return sgrMouseReport(SGR_NO_BUTTON_MOTION | modifiers, event, 'M')
+    }
     return null
   }
 
-  const modifiers = sgrModifiers(event.control)
+  let report: string | null = null
   if ((flags & WINDOWS_MOUSE_FLAGS.WHEELED) !== 0) {
     const delta = ((buttons >> 16) << 16) >> 16
     if (delta > 0) report = sgrMouseReport(SGR_WHEEL_UP | modifiers, event, 'M')

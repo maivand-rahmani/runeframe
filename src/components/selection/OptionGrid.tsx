@@ -37,7 +37,6 @@ export function OptionGrid({
   onSelect,
   columns = 2,
 }: OptionGridProps) {
-  const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
   const mouseGeometry = useMouseGeometry()
   const mouseRegistry = useMouseRegistry()
@@ -241,41 +240,16 @@ export function OptionGrid({
           {row.map((opt, colIdx) => {
             const globalIdx = rowIdx * safeColumns + colIdx
             const isFocused = globalIdx === focusIndex
-            const isDisabled = Boolean(opt.disabled)
 
             const rowKey = `${opt.value}:${globalIdx}`
-            const content = (
-              <Text
-                color={
-                  isDisabled
-                    ? colors.text.muted
-                    : isFocused
-                      ? colors.focus.active
-                      : colors.text.primary
-                }
-                bold={isFocused && !isDisabled}
-                dimColor={isDisabled}
-              >
-                {opt.label}
-              </Text>
-            )
-
-            if (autoMouseEnabled) {
-              return (
-                <OptionGridAutoCell
-                  key={rowKey}
-                  disabled={isDisabled}
-                  onClick={() => handleMouseSelect(opt, globalIdx)}
-                >
-                  {content}
-                </OptionGridAutoCell>
-              )
-            }
-
             return (
-              <Box key={rowKey} marginRight={2}>
-                {content}
-              </Box>
+              <OptionGridCell
+                key={rowKey}
+                option={opt}
+                focused={isFocused}
+                autoMouseEnabled={autoMouseEnabled}
+                onClick={() => handleMouseSelect(opt, globalIdx)}
+              />
             )
           })}
         </MouseLayout>
@@ -284,16 +258,69 @@ export function OptionGrid({
   )
 }
 
+function OptionGridCell({
+  option,
+  focused,
+  autoMouseEnabled,
+  onClick,
+}: {
+  option: OptionGridOption
+  focused: boolean
+  autoMouseEnabled: boolean
+  onClick: () => void
+}) {
+  const { colors } = useTheme()
+  const [hovered, setHovered] = useState(false)
+  const disabled = Boolean(option.disabled)
+  const content = (
+    <Text
+      color={
+        disabled
+          ? colors.text.muted
+          : focused
+            ? colors.focus.active
+            : hovered
+              ? colors.focus.selected
+              : colors.text.primary
+      }
+      bold={focused && !disabled}
+      dimColor={disabled}
+      underline={hovered && !disabled}
+    >
+      {option.label}
+    </Text>
+  )
+
+  if (autoMouseEnabled) {
+    return (
+      <OptionGridAutoCell
+        disabled={disabled}
+        onClick={onClick}
+        onEnter={() => setHovered(true)}
+        onLeave={() => setHovered(false)}
+      >
+        {content}
+      </OptionGridAutoCell>
+    )
+  }
+
+  return <Box marginRight={2}>{content}</Box>
+}
+
 function OptionGridAutoCell({
   children,
   disabled,
   onClick,
+  onEnter,
+  onLeave,
 }: {
   children: ReactNode
   disabled: boolean
   onClick: () => void
+  onEnter: () => void
+  onLeave: () => void
 }) {
-  const ref = useAutoMouseArea({ disabled, onClick })
+  const ref = useAutoMouseArea({ disabled, onClick, onEnter, onLeave })
   return (
     <Box ref={ref} marginRight={2}>
       {children}

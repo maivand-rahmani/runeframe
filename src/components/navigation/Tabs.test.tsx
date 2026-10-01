@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render } from 'ink-testing-library'
 import { useEffect, useState, type ReactElement } from 'react'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useKeyboardScope } from '../../interaction/keyboard/KeyboardScopeProvider.js'
@@ -35,6 +36,28 @@ async function clickCell(
 ) {
   await pressCell(stdin, cell)
   await releaseCell(stdin, cell)
+}
+
+async function hoverCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<35;${cell.x + 1};${cell.y + 1}M`)
+  await delay()
+}
+
+function isUnderlined(frame: string | undefined) {
+  return frame?.includes('\u001B[4m') ?? false
+}
+
+async function withColorOutput(run: () => Promise<void>) {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
 }
 
 async function pressCell(
@@ -200,7 +223,7 @@ describe('Tabs', () => {
     expect(changes).toEqual(['vocab', 'vocab', 'vocab', 'speaking'])
   })
 
-  it('click selects a tab and subsequent arrows use the clicked tab', async () => {
+  it('click selects a tab and subsequent arrows use the clicked tab', async () => withColorOutput(async () => {
     const changes: string[] = []
     function Harness() {
       const [activeId, setActiveId] = useState('grammar')
@@ -231,13 +254,27 @@ describe('Tabs', () => {
     )
 
     await delay(120)
-    await clickCell(stdin, cellInFrame(lastFrame(), 'Vocabulary'))
+    const grammar = cellInFrame(lastFrame(), 'Grammar')
+    await hoverCell(stdin, grammar)
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(changes).toEqual([])
+
+    const vocabulary = cellInFrame(lastFrame(), 'Vocabulary')
+    await hoverCell(stdin, vocabulary)
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(changes).toEqual([])
+
+    await hoverCell(stdin, { x: vocabulary.x, y: vocabulary.y + 3 })
+    expect(isUnderlined(lastFrame())).toBe(false)
+    expect(changes).toEqual([])
+
+    await clickCell(stdin, vocabulary)
     expect(changes).toEqual(['vocab'])
 
     stdin.write('\u001B[C')
     await delay()
     expect(changes).toEqual(['vocab', 'speaking'])
-  })
+  }))
 
   it('uses the latest committed onChange callback for mouse activation', async () => {
     const changes: string[] = []

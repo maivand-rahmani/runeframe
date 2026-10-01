@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
 import type { ThemeTokens } from '../../types.js'
@@ -25,6 +25,7 @@ export interface ButtonAppearance {
   color?: string
   dimColor?: boolean
   bold?: boolean
+  underline?: boolean
 }
 
 export function resolveButtonAppearance(
@@ -32,6 +33,7 @@ export function resolveButtonAppearance(
   variant: ButtonVariant,
   focused: boolean,
   disabled: boolean,
+  hovered = false,
 ): ButtonAppearance {
   if (disabled) {
     return {
@@ -44,6 +46,15 @@ export function resolveButtonAppearance(
     return {
       color: theme.colors.focus.ring,
       bold: true,
+      ...(hovered ? { underline: true } : {}),
+    }
+  }
+
+  if (hovered) {
+    return {
+      color: theme.colors.focus.ring,
+      bold: true,
+      underline: true,
     }
   }
 
@@ -69,13 +80,21 @@ export function Button({
   mouseBounds,
 }: ButtonProps) {
   const theme = useTheme()
-  const appearance = resolveButtonAppearance(theme, variant, focused, disabled)
+  const [hovered, setHovered] = useState(false)
+  const appearance = resolveButtonAppearance(
+    theme,
+    variant,
+    focused,
+    disabled,
+    hovered,
+  )
 
   const content = (
     <Text
       color={appearance.color}
       dimColor={appearance.dimColor}
       bold={appearance.bold}
+      underline={appearance.underline}
     >
       [{children}]
     </Text>
@@ -91,6 +110,7 @@ export function Button({
       focused={focused}
       mouseBounds={mouseBounds}
       onActivate={onActivate}
+      onHoverChange={setHovered}
     >
       {content}
     </ButtonInteraction>
@@ -102,12 +122,14 @@ function ButtonInteraction({
   focused,
   mouseBounds,
   onActivate,
+  onHoverChange,
   children,
 }: {
   disabled: boolean
   focused: boolean
   mouseBounds?: MouseBounds
   onActivate?: () => void
+  onHoverChange: (hovered: boolean) => void
   children: ReactNode
 }) {
   const registry = useMouseRegistry()
@@ -141,6 +163,8 @@ function ButtonInteraction({
       <MouseArea
         bounds={mouseBounds}
         disabled={disabled || onActivate == null}
+        onEnter={() => onHoverChange(true)}
+        onLeave={() => onHoverChange(false)}
         onClick={() => {
           const committed = committedRef.current
           if (
@@ -161,7 +185,11 @@ function ButtonInteraction({
   // `MouseProvider`. The area is inert until the anchored tree has measured.
   if (onActivate != null && geometry != null && registry != null) {
     return (
-      <ButtonAutoMouseTarget disabled={disabled} onActivate={onActivate}>
+      <ButtonAutoMouseTarget
+        disabled={disabled}
+        onActivate={onActivate}
+        onHoverChange={onHoverChange}
+      >
         {content}
       </ButtonAutoMouseTarget>
     )
@@ -173,16 +201,23 @@ function ButtonInteraction({
 function ButtonAutoMouseTarget({
   disabled,
   onActivate,
+  onHoverChange,
   children,
 }: {
   disabled: boolean
   onActivate: () => void
+  onHoverChange: (hovered: boolean) => void
   children: ReactNode
 }) {
   // `useAutoMouseArea` installs this render's callback and disabled state only
   // from its commit-phase layout effect, so a render that never commits cannot
   // reach the registered area.
-  const ref = useAutoMouseArea({ disabled, onClick: onActivate })
+  const ref = useAutoMouseArea({
+    disabled,
+    onClick: onActivate,
+    onEnter: () => onHoverChange(true),
+    onLeave: () => onHoverChange(false),
+  })
 
   // This measured Box is a real Yoga node and can reflow tightly constrained
   // flex rows differently from a bare Ink Text node. Keep it from shrinking

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
@@ -57,10 +57,15 @@ function MeasuredAction({
   children: ReactNode
   onClick: () => void
 }) {
-  const ref = useAutoMouseArea({ onClick })
+  const [hovered, setHovered] = useState(false)
+  const ref = useAutoMouseArea({
+    onClick,
+    onEnter: () => setHovered(true),
+    onLeave: () => setHovered(false),
+  })
   return (
     <MouseLayout ref={ref} flexDirection="row">
-      {children}
+      <Text underline={hovered}>{children}</Text>
     </MouseLayout>
   )
 }

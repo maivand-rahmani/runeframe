@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { TextInput } from './TextInput.js'
 import type { ReactElement } from 'react'
 import stripAnsi from 'strip-ansi'
+import chalk from 'chalk'
 import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
@@ -45,9 +46,23 @@ async function clickAt(
   await delay()
 }
 
+async function moveAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<35;${x + 1};${y + 1}M`)
+  await delay()
+}
+
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
 }
+
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
 
 async function typeChars(
   stdin: { write: (d: string) => void },
@@ -292,6 +307,39 @@ describe('TextInput', () => {
     expect(secondSubmit).toHaveBeenCalledWith('x')
   })
 
+  it('shows a hover cue without moving keyboard focus', async () => {
+    chalk.level = 1
+    const firstChange = vi.fn()
+    const secondChange = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <TextInput placeholder="first field" onChange={firstChange} />
+        <TextInput placeholder="second field" onChange={secondChange} />
+      </MouseLayout>,
+    )
+
+    await delay()
+    const initial = lastFrame() ?? ''
+    const second = findMarker(initial, 'second field')
+    await moveAt(stdin, second.x, second.y)
+    const hovered = lastFrame() ?? ''
+    expect(hovered).not.toBe(initial)
+    expect(stripAnsi(hovered)).toBe(stripAnsi(initial))
+
+    await moveAt(stdin, 50, 50)
+    expect(lastFrame()).toBe(initial)
+
+    stdin.write('x')
+    await delay()
+    expect(firstChange).toHaveBeenCalledWith('x')
+    expect(secondChange).not.toHaveBeenCalled()
+
+    await clickAt(stdin, second.x, second.y)
+    stdin.write('y')
+    await delay()
+    expect(secondChange).toHaveBeenCalledWith('y')
+  })
+
   it('hit-tests through ModalDialog measured ancestors', async () => {
     const onChange = vi.fn()
     const { stdin, lastFrame } = renderInFramework(
@@ -308,6 +356,40 @@ describe('TextInput', () => {
     stdin.write('x')
     await delay()
 
+    expect(onChange).toHaveBeenCalledWith('x')
+  })
+
+  it('keeps the hover cue on the focused field without hiding its error', async () => {
+    chalk.level = 1
+    const onChange = vi.fn()
+    const onSubmit = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <TextInput
+          placeholder="focused text"
+          onChange={onChange}
+          onSubmit={onSubmit}
+          validate={() => 'Invalid value'}
+        />
+      </MouseLayout>,
+    )
+
+    await delay()
+    stdin.write('\r')
+    await delay()
+    const invalid = lastFrame() ?? ''
+    expect(invalid).toContain('Invalid value')
+
+    const field = findMarker(invalid, 'focused text')
+    await moveAt(stdin, field.x, field.y)
+    const hovered = lastFrame() ?? ''
+    expect(hovered).not.toBe(invalid)
+    expect(stripAnsi(hovered)).toBe(stripAnsi(invalid))
+    expect(hovered).toContain('Invalid value')
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    stdin.write('x')
+    await delay()
     expect(onChange).toHaveBeenCalledWith('x')
   })
 })

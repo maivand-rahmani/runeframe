@@ -18,6 +18,7 @@ import { useFocusZone } from '../../interaction/focus/FocusTreeProvider.js'
 import { InputConsumptionResult } from '../../types.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { MouseScrollLayout } from '../../interaction/mouse/MouseScrollLayout.js'
+import { useToastVisibleRows } from '../feedback/ToastProvider.js'
 
 export interface AppShellProps {
   /** Optional top bar (app name, screen title, date) */
@@ -67,12 +68,17 @@ export function AppShell({
   const isWide = columns >= LAYOUT.medium
   const showSidebar = sidebar != null && !isNarrow
   const isFixedSidebar = sidebarPosition === 'fixed' && showSidebar
-  const isScrollable = scrollContent && isFixedSidebar
+  // Opt-in scrolling constrains the shell whenever the sidebar is fixed, even
+  // when narrow columns (or a missing sidebar node) hide it: the clipped shell
+  // still needs to reserve exactly the rows left by the toast host above it.
+  const isScrollable = scrollContent && sidebarPosition === 'fixed'
+  const usesFixedShell = isFixedSidebar || isScrollable
 
-  // Scroll mode owns a terminal-sized shell. Its scroll viewport grows into
-  // the space left after the optional top and status bars, rather than
-  // reserving a fixed number of rows that ignores their actual dimensions.
-  const shellHeight = Math.max(1, rows ?? 24)
+  // The toast host renders above this shell. Reserve exactly the rows it
+  // occupies so a terminal-sized shell never pushes the physical frame past
+  // the terminal and drifts measured mouse geometry.
+  const toastVisibleRows = useToastVisibleRows()
+  const shellHeight = Math.max(1, (rows ?? 24) - toastVisibleRows)
 
   // Viewport scroll state
   const [scrollOffset, setScrollOffset] = useState(0)
@@ -142,13 +148,16 @@ export function AppShell({
     { deps: [isScrollable, scrollUp, scrollDown], priority: 50 },
   )
 
-  // Fixed sidebar + scrollable content uses absolute positioning for the
-  // sidebar and lets its viewport fill the terminal-sized shell's free space.
-  if (isFixedSidebar) {
+  // Fixed sidebar (and/or opt-in scrolling) uses absolute positioning for the
+  // sidebar and lets the scroll viewport fill the terminal-sized shell's free
+  // space. The constrained shell clips to its reserved height so a shell that
+  // cannot fit every region never renders past the terminal.
+  if (usesFixedShell) {
     return (
       <MouseLayout
         flexDirection="column"
         height={isScrollable ? shellHeight : undefined}
+        overflow={isScrollable ? 'hidden' : undefined}
       >
         {topBar != null && (
           <MouseLayout marginBottom={theme.spacing.sm}>{topBar}</MouseLayout>

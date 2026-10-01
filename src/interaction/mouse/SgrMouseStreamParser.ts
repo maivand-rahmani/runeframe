@@ -35,12 +35,24 @@ export interface NormalizedMouseWheelEvent extends NormalizedMouseEventBase {
 }
 
 /**
+ * A supported 1003 movement report. `button` distinguishes a drag with the
+ * left button held (`'left'`, SGR code 32 + modifiers) from a hover with no
+ * button held (`'none'`, SGR code 35 + modifiers). Movement reports exist
+ * only in press form.
+ */
+export interface NormalizedMouseMoveEvent extends NormalizedMouseEventBase {
+  type: 'move'
+  button: 'left' | 'none'
+}
+
+/**
  * Mouse input normalized for the framework multiplexer: zero-based cell
  * coordinates, boolean modifier flags and a small discriminated union.
  */
 export type NormalizedMouseEvent =
   | NormalizedMouseButtonEvent
   | NormalizedMouseWheelEvent
+  | NormalizedMouseMoveEvent
 
 /** One ordered item returned by {@link SgrMouseStreamParser.push}. */
 export type SgrMouseStreamOutput =
@@ -63,9 +75,9 @@ const OPEN_BRACKET = 0x5b
 const LESS_THAN = 0x3c
 /** `;` byte: SGR parameter separator. */
 const SEMICOLON = 0x3b
-/** `M` final byte: button press (or wheel notch). */
+/** `M` final byte: press form (button press, wheel notch or motion). */
 const FINAL_PRESS = 0x4d
-/** `m` final byte: button release. */
+/** `m` final byte: release form (button release). */
 const FINAL_RELEASE = 0x6d
 /** ASCII `0`/`9` bound the digit range accepted in SGR parameters. */
 const DIGIT_ZERO = 0x30
@@ -76,6 +88,13 @@ const MODIFIER_SHIFT = 4
 const MODIFIER_META = 8
 const MODIFIER_CTRL = 16
 const MODIFIER_MASK = MODIFIER_SHIFT | MODIFIER_META | MODIFIER_CTRL
+
+/** SGR motion bit (32): set on every 1003 any-event movement report. */
+const MOTION_BIT = 32
+/** SGR base code of the "no button" state (3) used by motion reports. */
+const BUTTON_NONE = 3
+/** SGR code of a hover: motion bit 32 over the no-button base (35 + mods). */
+const MOTION_NONE = MOTION_BIT | BUTTON_NONE
 
 type CandidateScan =
   | { kind: 'complete'; length: number }
@@ -129,8 +148,15 @@ function scanCandidate(buffer: Buffer): CandidateScan {
 
 /**
  * Map a validated packet onto the normalized union. Returns `null` for every
- * complete but unsupported report (middle/right buttons, motion, extra bits,
- * wheel-release forms); the caller consumes those silently.
+ * complete but unsupported report (middle/right buttons and motion, extra
+ * bits, wheel-release forms, release-form motion); the caller consumes those
+ * silently.
+ *
+ * 1003 movement reports are decoded only in press form (`M`):
+ * - `Cb = 32 + modifiers` (motion over the left base code) is a drag,
+ * - `Cb = 35 + modifiers` (motion over the no-button base code 3) is a hover.
+ * Middle/right motion (33/34), wheel-with-motion (96+) and release-form
+ * motion stay unsupported.
  */
 function normalizeMousePacket(
   packet: SgrMousePacket,
@@ -138,9 +164,10 @@ function normalizeMousePacket(
   const shift = (packet.button & MODIFIER_SHIFT) !== 0
   const alt = (packet.button & MODIFIER_META) !== 0
   const ctrl = (packet.button & MODIFIER_CTRL) !== 0
-  // Bit 32 (motion) and bit 128 (extra buttons) survive this mask, so only a
-  // bare left button code (0-3 with modifiers) normalizes to `left`.
-  if ((packet.button & ~MODIFIER_MASK) === 0) {
+  // Modifier bits are stripped before classification; motion (32), wheel (64)
+  // and extra-button (128) bits survive so they can be distinguished.
+  const base = packet.button & ~MODIFIER_MASK
+  if (base === 0) {
     return {
       type: packet.kind,
       button: 'left',
@@ -149,6 +176,30 @@ function normalizeMousePacket(
       shift,
       alt,
       ctrl,
+    }
+  }
+  if (packet.kind === 'press') {
+    if (base === MOTION_BIT) {
+      return {
+        type: 'move',
+        button: 'left',
+        x: packet.x,
+        y: packet.y,
+        shift,
+        alt,
+        ctrl,
+      }
+    }
+    if (base === MOTION_NONE) {
+      return {
+        type: 'move',
+        button: 'none',
+        x: packet.x,
+        y: packet.y,
+        shift,
+        alt,
+        ctrl,
+      }
     }
   }
   const direction = decodeWheelDirection(packet)
@@ -173,10 +224,12 @@ function normalizeMousePacket(
  * output items.
  *
  * - Supported reports (`ESC[<Cb;Cx;CyM`/`m` for the left button and wheel
- *   64/65, with Shift/Meta/Ctrl bits) become {@link NormalizedMouseEvent}s
- *   with one-based SGR coordinates converted to zero-based once.
- * - Other complete SGR reports (middle/right buttons, motion, extra bits,
- *   wheel-release forms) are consumed silently so they never leak as text.
+ *   64/65, plus press-form 1003 motion 32/35 for drag/hover, with
+ *   Shift/Meta/Ctrl bits) become {@link NormalizedMouseEvent}s with one-based
+ *   SGR coordinates converted to zero-based once.
+ * - Other complete SGR reports (middle/right buttons and motion, extra bits,
+ *   wheel-release forms, release-form motion) are consumed silently so they
+ *   never leak as text.
  * - Every other byte — including malformed, zero-coordinate, oversized and
  *   still-incomplete candidates — is emitted exactly once as `keyboard` data,
  *   in stream order, so the caller can forward it unchanged.

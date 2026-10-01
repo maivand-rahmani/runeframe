@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { afterEach, describe, it, expect, beforeEach } from 'vitest'
 import { render } from 'ink-testing-library'
 import { useEffect, type ReactNode } from 'react'
 import type { ReactElement } from 'react'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useKeyboardScope } from '../../interaction/keyboard/KeyboardScopeProvider.js'
+import chalk from 'chalk'
 import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
@@ -64,6 +65,11 @@ function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
+
 function cellInFrame(frame: string | undefined, text: string) {
   const plain = (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
   const lines = plain.split(/\r?\n/)
@@ -81,6 +87,16 @@ async function clickCell(
   stdin.write(`\u001B[<0;${x};${y}M`)
   await delay()
   stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+async function moveCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  const x = cell.x + 1
+  const y = cell.y + 1
+  stdin.write(`\u001B[<35;${x};${y}M`)
   await delay()
 }
 
@@ -300,5 +316,48 @@ describe('CommandPalette', () => {
     await delay()
     expect(executed).toEqual(['second'])
     expect(closed).toBe(true)
+  })
+
+  it('shows a hover cue on the selected row without changing selection or executing', async () => {
+    chalk.level = 1
+    const executed: string[] = []
+    const execRegistry = new ActionRegistry()
+    execRegistry.register({
+      id: 'first',
+      label: 'First Action',
+      category: 'test',
+      handler: () => executed.push('first'),
+    })
+    execRegistry.register({
+      id: 'second',
+      label: 'Second Action',
+      category: 'test',
+      handler: () => executed.push('second'),
+    })
+
+    const { stdin, lastFrame } = render(
+      <FrameworkProvider registry={interactionRegistry} defaultScreen="test">
+        <CommandScope>
+          <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+            <CommandPalette registry={execRegistry} onClose={() => {}} />
+          </MouseLayout>
+        </CommandScope>
+      </FrameworkProvider>,
+    )
+
+    await delay(120)
+    const initial = lastFrame() ?? ''
+    await moveCell(stdin, cellInFrame(initial, 'First Action'))
+    const hovered = lastFrame() ?? ''
+    expect(hovered).not.toBe(initial)
+    expect(hovered.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')).toBe(
+      initial.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ''),
+    )
+    expect(hovered).toContain('> First Action')
+    expect(hovered).not.toContain('> Second Action')
+    expect(executed).toEqual([])
+
+    await moveCell(stdin, cellInFrame(initial, 'TEST'))
+    expect(lastFrame()).toBe(initial)
   })
 })

@@ -70,8 +70,16 @@ async function clickAtCell(stdin: WritableStdin, x: number, y: number) {
 }
 
 /** Minimal direct consumer of `useAutoMouseArea` for hook-level coverage. */
-function AutoMouseProbe({ onClick }: { onClick: () => void }) {
-  const ref = useAutoMouseArea({ onClick })
+function AutoMouseProbe({
+  onClick,
+  onEnter,
+  onLeave,
+}: {
+  onClick: () => void
+  onEnter?: () => void
+  onLeave?: () => void
+}) {
+  const ref = useAutoMouseArea({ onClick, onEnter, onLeave })
   return (
     <Box ref={ref} flexShrink={0}>
       <Text>[Probe]</Text>
@@ -311,6 +319,45 @@ describe('useAutoMouseArea', () => {
     expect(after.x).toBe(before.x + 6)
     await clickAtCell(stdin, after.x, after.y)
     expect(onClick).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('useAutoMouseArea committed hover reconciliation', () => {
+  it('re-resolves hover after a committed origin shift without motion', async () => {
+    const enter = vi.fn()
+    const leave = vi.fn()
+    const probe = (
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <AutoMouseProbe onClick={() => {}} onEnter={enter} onLeave={leave} />
+      </MouseLayout>
+    )
+    const shifted = (
+      <MouseLayout origin={{ x: 0, y: 5 }} flexDirection="column">
+        <AutoMouseProbe onClick={() => {}} onEnter={enter} onLeave={leave} />
+      </MouseLayout>
+    )
+
+    const { rerender, stdin, lastFrame } = renderApp(probe)
+    await delay()
+    const cell = findMarker(lastFrame() ?? '', '[Probe]')
+
+    // Hover the measured area through a real motion report.
+    stdin.write(`\u001B[<35;${cell.x + 1};${cell.y + 1}M`)
+    await delay()
+    expect(enter).toHaveBeenCalledTimes(1)
+
+    // A committed origin shift (for example a scroll offset) relocates the
+    // measured record away from the stationary pointer.
+    rerender(wrapApp(shifted))
+    await delay()
+    expect(leave).toHaveBeenCalledTimes(1)
+    expect(leave).toHaveBeenCalledWith({ x: cell.x, y: cell.y })
+
+    // Returning the origin puts the same record back under the pointer cell.
+    rerender(wrapApp(probe))
+    await delay()
+    expect(enter).toHaveBeenCalledTimes(2)
+    expect(leave).toHaveBeenCalledTimes(1)
   })
 })
 

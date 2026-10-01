@@ -16,6 +16,7 @@ export interface CommandPaletteProps {
 export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const results = registry.search(query)
   const { colors } = useTheme()
   const mouseGeometry = useMouseGeometry()
@@ -24,6 +25,7 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
 
   useEffect(() => {
     setSelectedIndex(0)
+    setHoveredIndex(null)
   }, [query])
 
   const ref = useRef({
@@ -102,10 +104,12 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
         {renderResults(
           results,
           selectedIndex,
+          hoveredIndex,
           query,
           colors,
           autoMouseEnabled,
           setSelectedIndex,
+          (index, hovered) => setHoveredIndex(hovered ? index : null),
         )}
       </MouseLayout>
     </MouseLayout>
@@ -115,10 +119,12 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
 function renderResults(
   results: ActionMatch[],
   selectedIndex: number,
+  hoveredIndex: number | null,
   query: string,
   colors: ReturnType<typeof useTheme>['colors'],
   autoMouseEnabled: boolean,
   onSelect: (index: number) => void,
+  onHoverChange: (index: number, hovered: boolean) => void,
 ): ReactElement[] {
   const elements: ReactElement[] = []
   let currentCategory = ''
@@ -136,11 +142,13 @@ function renderResults(
 
     const resultIndex = flatIndex
     const isSelected = resultIndex === selectedIndex
+    const isHovered = resultIndex === hoveredIndex
     const rowKey = `${match.action.id}:${resultIndex}`
     const rowContents = (
       <Text
         color={isSelected ? colors.focus.active : undefined}
         bold={isSelected}
+        underline={isHovered}
       >
         {isSelected ? '> ' : '  '}
         {match.action.label}
@@ -151,6 +159,8 @@ function renderResults(
         <CommandPaletteAutoRow
           key={rowKey}
           onClick={() => onSelect(resultIndex)}
+          onEnter={() => onHoverChange(resultIndex, true)}
+          onLeave={() => onHoverChange(resultIndex, false)}
         >
           {rowContents}
         </CommandPaletteAutoRow>
@@ -177,14 +187,20 @@ function renderResults(
 function CommandPaletteAutoRow({
   children,
   onClick,
+  onEnter,
+  onLeave,
 }: {
   children: ReactElement
   onClick: () => void
+  onEnter: () => void
+  onLeave: () => void
 }) {
   const ref = useAutoMouseArea({
     scope: 'command',
     priority: 80,
     onClick,
+    onEnter,
+    onLeave,
   })
   return <Box ref={ref}>{children}</Box>
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Text } from 'ink'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { FocusTreeProvider } from '../../interaction/focus/FocusTreeProvider.js'
@@ -52,6 +53,20 @@ function cellInFrame(frame: string | undefined, text: string) {
   return { x: lines[y].indexOf(text), y }
 }
 
+function isUnderlined(frame: string | undefined) {
+  return /\u001B\[(?:\d+;)*4(?:;\d+)*m/.test(frame ?? '')
+}
+
+async function withColorOutput(run: () => Promise<void>) {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
+}
+
 async function clickCell(
   stdin: { write: (data: string) => unknown },
   cell: { x: number; y: number },
@@ -61,6 +76,19 @@ async function clickCell(
   stdin.write(`\u001B[<0;${x};${y}M`)
   await delay()
   stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+async function moveCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<35;${cell.x + 1};${cell.y + 1}M`)
+  await delay()
+}
+
+async function moveOutside(stdin: { write: (data: string) => unknown }) {
+  stdin.write('\u001B[<35;50;50M')
   await delay()
 }
 
@@ -261,6 +289,128 @@ describe('List', () => {
     expect(lastFrame()).toContain('Item Beta*')
     expect(selected).toEqual(['b'])
     expect(activated).toHaveLength(0)
+  })
+
+  it('automatically tracks hover without changing focus, selection, or activation', async () => {
+    const selected: string[] = []
+    const activated: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <List
+          items={sampleItems}
+          onSelect={(id) => selected.push(id)}
+          onActivate={(id) => activated.push(id)}
+          renderItem={(item, { focused, selected: isSelected, hovered }) => (
+            <Text>
+              {item.label} f={String(focused)} s={String(isSelected)} h={String(hovered)}
+            </Text>
+          )}
+        />
+      </MouseLayout>,
+    )
+
+    await delay(100)
+    await moveCell(stdin, cellInFrame(lastFrame(), 'Item Beta'))
+    expect(lastFrame()).toContain('Item Alpha f=true s=false h=false')
+    expect(lastFrame()).toContain('Item Beta f=false s=false h=true')
+    expect(selected).toEqual([])
+    expect(activated).toEqual([])
+
+    await moveOutside(stdin)
+    expect(lastFrame()).toContain('Item Beta f=false s=false h=false')
+
+    await clickCell(stdin, cellInFrame(lastFrame(), 'Item Beta'))
+    expect(lastFrame()).toContain('Item Beta f=true s=false h=false')
+    expect(selected).toEqual(['b'])
+    expect(activated).toEqual([])
+  })
+
+  it('tracks hover through explicit row bounds without changing click semantics', async () => {
+    const selected: string[] = []
+    const activated: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <List
+        items={sampleItems}
+        onSelect={(id) => selected.push(id)}
+        onActivate={(id) => activated.push(id)}
+        mouseBoundsForItem={(_item, index) => ({
+          x: 0,
+          y: index,
+          width: 20,
+          height: 1,
+        })}
+        renderItem={(item, { focused, hovered }) => (
+          <Text>
+            {item.label} f={String(focused)} h={String(hovered)}
+          </Text>
+        )}
+      />,
+    )
+
+    await delay(100)
+    await moveCell(stdin, { x: 1, y: 1 })
+    expect(lastFrame()).toContain('Item Beta f=false h=true')
+    expect(selected).toEqual([])
+    expect(activated).toEqual([])
+
+    await clickCell(stdin, { x: 1, y: 1 })
+    expect(lastFrame()).toContain('Item Beta f=true h=true')
+    expect(selected).toEqual(['b'])
+    expect(activated).toEqual([])
+  })
+
+  it('keeps a selected, focused custom row visibly hovered without activating it', async () => {
+    await withColorOutput(async () => {
+      const selected: string[] = []
+      const activated: string[] = []
+      const { stdin, lastFrame } = renderInFramework(
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <List
+            items={sampleItems}
+            selectedId="a"
+            onSelect={(id) => selected.push(id)}
+            onActivate={(id) => activated.push(id)}
+            renderItem={(item, { focused, selected: isSelected, hovered }) => (
+              <Text>
+                {item.label} f={String(focused)} s={String(isSelected)} h={String(hovered)}
+              </Text>
+            )}
+          />
+        </MouseLayout>,
+      )
+
+      await delay(120)
+      const selectedRow = cellInFrame(lastFrame(), 'Item Alpha')
+      await moveCell(stdin, selectedRow)
+      expect(lastFrame()).toContain('Item Alpha f=true s=true h=true')
+      expect(isUnderlined(lastFrame())).toBe(true)
+      expect(selected).toEqual([])
+      expect(activated).toEqual([])
+
+      await clickCell(stdin, selectedRow)
+      expect(selected).toEqual(['a'])
+      expect(activated).toEqual([])
+    })
+  })
+
+  it('underlines the default selected and focused row on hover', async () => {
+    await withColorOutput(async () => {
+      const selected: string[] = []
+      const { stdin, lastFrame } = renderInFramework(
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <List
+            items={sampleItems}
+            selectedId="a"
+            onSelect={(id) => selected.push(id)}
+          />
+        </MouseLayout>,
+      )
+
+      await delay(120)
+      await moveCell(stdin, cellInFrame(lastFrame(), 'Item Alpha'))
+      expect(isUnderlined(lastFrame())).toBe(true)
+      expect(selected).toEqual([])
+    })
   })
 
   it('automatically hit-tests visible rows and preserves select-only click semantics', async () => {

@@ -3,10 +3,12 @@
 Standalone, Windows-only Node transport for Ink 7 applications. The native
 helper owns the console input queue (`CONIN$`) and emits JSON records; this
 module translates them into keyboard bytes plus SGR mouse reports and routes
-both through the shared SGR input multiplexer, so:
+both through the shared SGR input multiplexer/parser (any-event motion `1003`
+with extended coordinates `1006`), so:
 
 - `stdin` (the multiplexer's Ink-facing stream) carries keyboard bytes only,
-- `mouseEvents` publishes normalized press/release/wheel events,
+- `mouseEvents` publishes normalized press/release/wheel and hover/drag move
+  events,
 - the helper stays the sole console queue owner: JavaScript never reads
   `process.stdin` and never calls `process.stdin.setRawMode`.
 
@@ -104,14 +106,20 @@ the stream.
 - Keyboard: navigation virtual keys and the enhanced gray scan-code fallback,
   Ctrl+letter control bytes, Alt prefixes, repeats (bounded), and Unicode
   surrogate pairs joined across records.
-- Mouse: stateful left press/release edges and vertical wheel with modifiers,
+- Mouse: stateful left press/release edges, vertical wheel with modifiers, and
+  press-form motion. A `MOUSE_MOVED` record becomes SGR `Cb=32` while the left
+  button is held (drag) or `Cb=35` with no button (hover); motion with only
+  other buttons held is ignored. Motion never mutates the press/release edge
+  tracker, so it cannot synthesize a press, release or click. All reports are
   mapped from buffer coordinates through the reported viewport origin. There
   is no separate Windows mouse parser, event model or hit testing here — the
-  common multiplexer and the framework own routing.
-- Known limitation (unchanged, nonregression): motion/drag records are ignored
-  and do not disturb the tracked button state, so a drag release is only
-  reported when a press edge was seen first. Right/middle buttons, horizontal
-  wheel and out-of-viewport points are ignored.
+  shared SGR parser/multiplexer and the framework own routing, including
+  `MouseArea` hover and captured drag callbacks.
+- Known limitation (nonregression): right/middle buttons, horizontal wheel and
+  out-of-viewport points remain ignored, and a drag release is still reported
+  only when a press edge was seen first. Hover/drag motion is covered by the
+  automated transport and parser tests; physical hover/drag in a real terminal
+  has not been verified yet.
 - Unexpected helper exit/error writes a visible warning, ends the Ink stream
   and calls `onInputFailure` exactly once so the host can unmount and await
   `close()`.

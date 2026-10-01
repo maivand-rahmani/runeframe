@@ -1,7 +1,12 @@
 import { useLayoutEffect, useRef, type RefObject } from 'react'
 import { useBoxMetrics, type DOMElement } from 'ink'
 import type { FocusScope } from '../../types.js'
-import type { MouseBounds, MouseClickEvent } from './MouseArea.js'
+import type {
+  MouseBounds,
+  MouseClickEvent,
+  MouseDragEvent,
+  MousePointerEvent,
+} from './MouseArea.js'
 import { allocateMouseAreaId } from './mouseAreaId.js'
 import type { MouseAreaRegistration } from './MouseProvider.js'
 import { useMouseRegistry } from './MouseProvider.js'
@@ -21,6 +26,20 @@ export interface UseAutoMouseAreaOptions {
   priority?: number
   /** Fired when a matching press and release land on the measured bounds. */
   onClick?: (event: MouseClickEvent) => void
+  /** Fired when motion makes this measured area the hover target. */
+  onEnter?: (event: MousePointerEvent) => void
+  /** Fired when the pointer moves from this area to a different target. */
+  onLeave?: (event: MousePointerEvent) => void
+  /** Fired on every motion while this area is the hover target. */
+  onMove?: (event: MousePointerEvent) => void
+  /** Fired when a left press on the measured bounds becomes a drag. */
+  onDragStart?: (event: MouseDragEvent) => void
+  /** Fired for every later motion, even outside the measured bounds. */
+  onDragMove?: (event: MouseDragEvent) => void
+  /** Fired when the drag is released; the click is suppressed. */
+  onDragEnd?: (event: MouseDragEvent) => void
+  /** Fired when an in-flight drag is cancelled while this area is registered. */
+  onDragCancel?: (event: MouseDragEvent) => void
 }
 
 /** Layout values reported by Ink's public `useBoxMetrics` for this node. */
@@ -92,6 +111,13 @@ export function prepareAutoMouseAreaUpdate(
     priority: options.priority ?? 0,
     disabled: options.disabled ?? false,
     onClick: options.onClick,
+    onEnter: options.onEnter,
+    onLeave: options.onLeave,
+    onMove: options.onMove,
+    onDragStart: options.onDragStart,
+    onDragMove: options.onDragMove,
+    onDragEnd: options.onDragEnd,
+    onDragCancel: options.onDragCancel,
   }
 }
 
@@ -110,6 +136,13 @@ export function commitAutoMouseAreaUpdate(
   record.priority = update.priority
   record.disabled = update.disabled
   record.onClick = update.onClick
+  record.onEnter = update.onEnter
+  record.onLeave = update.onLeave
+  record.onMove = update.onMove
+  record.onDragStart = update.onDragStart
+  record.onDragMove = update.onDragMove
+  record.onDragEnd = update.onDragEnd
+  record.onDragCancel = update.onDragCancel
 }
 
 /**
@@ -131,6 +164,12 @@ export function commitAutoMouseAreaUpdate(
  *   previous committed values stay in place until commit, so an aborted or
  *   concurrent render can never expose geometry or callbacks early. The
  *   layout-effect cleanup removes the record on unmount or provider change.
+ * - After every commit the provider is notified with the record; when the
+ *   committed bounds, scope, priority or disabled state actually changed it
+ *   queues one coalesced re-hit-test at the last pointer cell seen in a motion
+ *   report (identity transitions only — no synthetic motion), so measured
+ *   areas that move under a stationary pointer update hover without any
+ *   further input.
  */
 export function useAutoMouseArea(
   options: UseAutoMouseAreaOptions = {},
@@ -161,8 +200,13 @@ export function useAutoMouseArea(
   // Declared before registration: on the initial commit the record already
   // carries this commit's values when it becomes registry-visible, and on later
   // commits it moves from the previous committed state straight to the new one.
+  // The change report follows the install, so the provider re-hit-tests the
+  // last known pointer when committed geometry/scope/priority/disabled moved a
+  // registered area (for example an AppShell scroll/resize). Callback-only
+  // changes never schedule: the provider compares routing-relevant fields.
   useLayoutEffect(() => {
     commitAutoMouseAreaUpdate(record, update)
+    registry?.notifyAreaChanged(record)
   })
 
   useLayoutEffect(() => {

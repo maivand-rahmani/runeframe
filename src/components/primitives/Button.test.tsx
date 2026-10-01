@@ -3,6 +3,7 @@ import { render } from 'ink-testing-library'
 import { Text } from 'ink'
 import type { ReactElement } from 'react'
 import stripAnsi from 'strip-ansi'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import {
   borderStyles,
@@ -49,6 +50,29 @@ async function clickAt(stdin: { write: (data: string) => void }, x: number, y: n
   await delay()
   stdin.write(`\u001B[<0;${x};${y}m`)
   await delay()
+}
+
+async function hoverAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<35;${x};${y}M`)
+  await delay()
+}
+
+function isUnderlined(frame: string | undefined) {
+  return frame?.includes('\u001B[4m') ?? false
+}
+
+async function withColorOutput(run: () => Promise<void>) {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
 }
 
 /** Locate a rendered marker and return its zero-based terminal cell. */
@@ -136,6 +160,51 @@ describe('Button', () => {
     expect(onActivate).toHaveBeenCalledTimes(2)
   })
 
+  it('shows temporary hover feedback for explicit bounds without activating', async () => withColorOutput(async () => {
+    const onActivate = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <Button
+        onActivate={onActivate}
+        mouseBounds={{ x: 0, y: 0, width: 10, height: 1 }}
+      >
+        Preview
+      </Button>,
+    )
+
+    await delay()
+    expect(isUnderlined(lastFrame())).toBe(false)
+
+    await hoverAt(stdin, 2, 1)
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(onActivate).not.toHaveBeenCalled()
+
+    await hoverAt(stdin, 2, 3)
+    expect(isUnderlined(lastFrame())).toBe(false)
+    expect(onActivate).not.toHaveBeenCalled()
+
+    await clickAt(stdin, 2, 1)
+    expect(onActivate).toHaveBeenCalledTimes(1)
+  }))
+
+  it('keeps focused styling and adds hover feedback without activating', async () => withColorOutput(async () => {
+    const onActivate = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <Button
+        focused
+        onActivate={onActivate}
+        mouseBounds={{ x: 0, y: 0, width: 10, height: 1 }}
+      >
+        Focused
+      </Button>,
+    )
+
+    await delay()
+    await hoverAt(stdin, 2, 1)
+
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(onActivate).not.toHaveBeenCalled()
+  }))
+
   it('keeps keyboard-only activation available without mouse bounds', async () => {
     const onActivate = vi.fn()
     const { stdin } = renderInFramework(
@@ -151,7 +220,7 @@ describe('Button', () => {
     expect(onActivate).toHaveBeenCalledTimes(1)
   })
 
-  it('activates once from automatic geometry only after the anchored tree measured', async () => {
+  it('activates once from automatic geometry only after the anchored tree measured', async () => withColorOutput(async () => {
     const onActivate = vi.fn()
     const { stdin, lastFrame } = renderInFramework(
       <MouseLayout origin={{ x: 0, y: 0 }}>
@@ -167,12 +236,21 @@ describe('Button', () => {
 
     await delay()
     const cell = findMarker(lastFrame() ?? '', '[Auto]')
+
+    await hoverAt(stdin, cell.x + 1, cell.y + 1)
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(onActivate).not.toHaveBeenCalled()
+
+    await hoverAt(stdin, cell.x + 1, cell.y + 3)
+    expect(isUnderlined(lastFrame())).toBe(false)
+    expect(onActivate).not.toHaveBeenCalled()
+
     await clickAt(stdin, cell.x + 1, cell.y + 1)
     expect(onActivate).toHaveBeenCalledTimes(1)
 
     await clickAt(stdin, cell.x + 1, cell.y + 1)
     expect(onActivate).toHaveBeenCalledTimes(2)
-  })
+  }))
 
   it('keeps explicit mouseBounds authoritative beneath an anchored MouseLayout', async () => {
     const onActivate = vi.fn()
@@ -312,9 +390,9 @@ describe('Button', () => {
     expect(onActivate).not.toHaveBeenCalled()
   })
 
-  it('does not activate a disabled button from keyboard or mouse', async () => {
+  it('does not activate a disabled button from keyboard or mouse', async () => withColorOutput(async () => {
     const onActivate = vi.fn()
-    const { stdin } = renderInFramework(
+    const { stdin, lastFrame } = renderInFramework(
       <Button
         focused
         disabled
@@ -328,9 +406,11 @@ describe('Button', () => {
     await delay()
     stdin.write('\r')
     await delay()
+    await hoverAt(stdin, 1, 1)
+    expect(isUnderlined(lastFrame())).toBe(false)
     await clickAt(stdin, 1, 1)
     expect(onActivate).not.toHaveBeenCalled()
-  })
+  }))
 
   it('resolves variant and state appearance from theme tokens', () => {
     expect(resolveButtonAppearance(theme, 'default', false, false)).toEqual({
@@ -353,6 +433,23 @@ describe('Button', () => {
     expect(resolveButtonAppearance(theme, 'default', true, false)).toEqual({
       color: theme.colors.focus.ring,
       bold: true,
+    })
+
+    expect(resolveButtonAppearance(theme, 'default', false, false, true)).toEqual({
+      color: theme.colors.focus.ring,
+      bold: true,
+      underline: true,
+    })
+
+    expect(resolveButtonAppearance(theme, 'default', true, false, true)).toEqual({
+      color: theme.colors.focus.ring,
+      bold: true,
+      underline: true,
+    })
+
+    expect(resolveButtonAppearance(theme, 'default', false, true, true)).toEqual({
+      color: theme.colors.text.secondary,
+      dimColor: true,
     })
 
     expect(resolveButtonAppearance(theme, 'primary', true, true)).toEqual({

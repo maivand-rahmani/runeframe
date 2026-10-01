@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
@@ -55,10 +55,16 @@ function MeasuredFooterAction({
   onClick: () => void
   children: ReactNode
 }) {
-  const ref = useAutoMouseArea({ disabled, onClick })
+  const [hovered, setHovered] = useState(false)
+  const ref = useAutoMouseArea({
+    disabled,
+    onClick,
+    onEnter: () => setHovered(true),
+    onLeave: () => setHovered(false),
+  })
   return (
     <MouseLayout ref={ref} flexDirection="row">
-      {children}
+      <Text underline={hovered && !disabled}>{children}</Text>
     </MouseLayout>
   )
 }

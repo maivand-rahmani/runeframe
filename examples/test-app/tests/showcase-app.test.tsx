@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import type { ReactElement } from 'react'
+import chalk from 'chalk'
 import type { FrameworkProviderProps } from 'runeframe'
 // The app is imported from its local source; every framework API it uses is
 // resolved from the repository `src` entry points through the `runeframe`
@@ -92,6 +93,16 @@ function waitForFrameWithout(
 const settle = (ms = 50): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms))
 
+async function withColorOutput(run: () => Promise<void>): Promise<void> {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
+}
+
 function cellForText(
   app: AppRender,
   text: string,
@@ -160,6 +171,38 @@ function wheelDownAtText(app: AppRender, text: string): void {
   sendSgrMouse(app, 65, cellForText(app, text))
 }
 
+function emitSourceMove(
+  source: ReturnType<typeof createFakeMouseEventSource>,
+  button: 'left' | 'none',
+  cell: { column: number; row: number },
+): void {
+  source.emit({
+    type: 'move',
+    button,
+    x: cell.column,
+    y: cell.row,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  })
+}
+
+function emitSourceButton(
+  source: ReturnType<typeof createFakeMouseEventSource>,
+  type: 'press' | 'release',
+  cell: { column: number; row: number },
+): void {
+  source.emit({
+    type,
+    button: 'left',
+    x: cell.column,
+    y: cell.row,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  })
+}
+
 const listWheelTargets = [
   '07 / Themes · dark and light',
   '06 / Mouse · clicks and wheel',
@@ -182,10 +225,8 @@ function wheelDownInShell(app: AppRender): void {
   const visibleTarget = [
     'Keyboard focus:',
     'List activations:',
-    'MouseArea / caller-owned geometry',
-    'Click-only target',
-    'Bounds stay fixed',
-    '[ demo target',
+    'Hover + drag / app name in the top bar',
+    'MouseArea / explicit caller bounds',
     'Live origin',
   ].find((target) => frame.includes(target))
   if (!visibleTarget) throw new Error('No visible shell content to wheel over')
@@ -234,6 +275,59 @@ async function pressUntilFrameWithout(
       if (attempt === attempts) throw error
     }
   }
+}
+
+/** Counts non-overlapping literal occurrences of `needle` in a frame. */
+function countOccurrences(haystack: string, needle: string): number {
+  let count = 0
+  let index = haystack.indexOf(needle)
+  while (index !== -1) {
+    count++
+    index = haystack.indexOf(needle, index + needle.length)
+  }
+  return count
+}
+
+async function waitForOccurrences(
+  app: AppRender,
+  text: string,
+  minimum: number,
+  timeout = 3000,
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(countOccurrences(frameText(app), text)).toBeGreaterThanOrEqual(
+        minimum,
+      )
+    },
+    { timeout, interval: 25 },
+  )
+}
+
+/**
+ * Maps a frame-text cell to the row a real terminal would display after Ink
+ * writes a frame taller than the mocked terminal: the emulator keeps the
+ * bottom `ttyRows` lines, so every frame row shifts up by the overflow. When
+ * the frame fits, this is exactly `cellForText`. A click must land at the
+ * visual row, not the Yoga/frame row, or measured hitboxes drift off target.
+ */
+function visualCellForText(
+  app: AppRender,
+  text: string,
+  ttyRows: number,
+): { column: number; row: number } {
+  const cell = cellForText(app, text)
+  const overflow = Math.max(0, frameRowCount(app) - ttyRows)
+  return { column: cell.column, row: Math.max(0, cell.row - overflow) }
+}
+
+async function clickCell(
+  app: AppRender,
+  cell: { column: number; row: number },
+): Promise<void> {
+  sendSgrMouse(app, 0, cell)
+  await settle()
+  sendSgrMouse(app, 0, cell, true)
 }
 
 describe('ShowcaseApp package-consumer smoke', () => {
@@ -330,6 +424,200 @@ describe('ShowcaseApp package-consumer smoke', () => {
     await pressUntilFrame(app, 'f', 'Toast provider is live.')
   })
 
+  it('keeps the Interaction lab mouse button aligned with its visible row after toasts', async () => {
+    const app = renderApp()
+    setTtyRows(app, 24)
+    await waitForFrame(app, 'DARK / OVERVIEW')
+
+    await pressUntilFrame(app, '4', 'INPUT LAB / 04')
+    const arrowRight = '\u001b[C'
+    await pressUntilFrame(app, arrowRight, 'EventTracer + KeyboardDebugInspector')
+    await pressUntilFrame(app, arrowRight, 'MouseLayout / measured targets')
+    await waitForFrame(app, 'Button activations: 0')
+    await settle(100)
+
+    // Baseline: with no toast the frame fits the mocked terminal, so the
+    // rendered row is the physical row and the click activates the button.
+    expect(frameRowCount(app)).toBeLessThanOrEqual(24)
+    await clickText(app, '[Run mouse action]')
+    await waitForFrame(app, 'Button activations: 1')
+
+    // Toasts render above the fixed-height shell. One toast must not push the
+    // frame past the mocked terminal height, or Ink scrolls the terminal and
+    // every measured hitbox ends up one row below its visual target.
+    await pressUntilFrame(app, 'f', 'Toast provider is live.')
+    expect(frameRowCount(app)).toBeLessThanOrEqual(24)
+
+    // The button must stay clickable at the row where it is actually rendered.
+    await clickCell(app, visualCellForText(app, '[Run mouse action]', 24))
+    await waitForFrame(app, 'Button activations: 2')
+
+    // Stacked toasts (up to the provider's visible cap) must stay inside the
+    // same bound and keep the measured target aligned.
+    app.stdin.write('f')
+    await settle()
+    app.stdin.write('f')
+    await waitForOccurrences(app, 'Toast provider is live.', 3)
+    expect(frameRowCount(app)).toBeLessThanOrEqual(24)
+    await clickCell(app, visualCellForText(app, '[Run mouse action]', 24))
+    await waitForFrame(app, 'Button activations: 3')
+  })
+
+  it('uses clickable shell actions, route buttons and the command palette', async () => {
+    const app = renderApp()
+    await waitForFrame(app, 'DARK / OVERVIEW')
+
+    await clickText(app, 'Open control bench')
+    await waitForFrame(app, 'DARK / CONTROLS')
+    await clickText(app, 'Overview')
+    await waitForFrame(app, 'DARK / OVERVIEW')
+    await waitForFrame(app, 'Open control bench')
+    await clickText(app, 'Open control bench')
+    await waitForFrame(app, 'DARK / CONTROLS')
+    await clickText(app, 'Back')
+    await waitForFrame(app, 'DARK / OVERVIEW')
+
+    await clickText(app, 'Help')
+    await waitForFrame(app, 'Feature Lab / quick keys')
+    await clickText(app, 'Close')
+    await waitForFrame(app, 'DARK / OVERVIEW')
+
+    await clickText(app, 'Commands')
+    await waitForFrame(app, 'Click a command to run it')
+    await clickText(app, 'Open workflow')
+    await waitForFrame(app, 'WORKFLOW / 02')
+
+    await clickText(app, 'Theme: Light')
+    await waitForFrame(app, 'LIGHT / WORKFLOW')
+    await clickText(app, 'Theme: Dark')
+    await waitForFrame(app, 'DARK / WORKFLOW')
+    await clickText(app, 'Home')
+    await waitForFrame(app, 'DARK / OVERVIEW')
+  })
+
+  it('keeps the measured hover cue visible on feature routes outside the mouse lab', async () => {
+    const events: MouseRoutingDiagnostic[] = []
+    const source = createFakeMouseEventSource()
+    const node = (
+      <ShowcaseApp
+        mouseDiagnostics={(event) => events.push(event)}
+        mouseEventSource={source}
+      />
+    )
+    const app = render(node)
+    activeRenders.push(app)
+    setTtyRows(app, 24, node)
+    await waitForFrame(app, 'DARK / OVERVIEW')
+    await waitForFrame(app, '○ hover')
+
+    await pressUntilFrame(app, '2', 'WORKFLOW / 02')
+    await waitForFrame(app, '○ hover')
+    const brandCell = cellForText(app, 'RUNEFRAME / FEATURE LAB')
+    emitSourceMove(source, 'none', brandCell)
+    await waitForFrame(app, '● hover')
+
+    expect(frameText(app)).toContain('WORKFLOW / 02')
+    expect(
+      events.some(
+        (event) =>
+          event.action === 'move' &&
+          event.x === brandCell.column &&
+          event.y === brandCell.row &&
+          event.targetId !== null,
+      ),
+    ).toBe(true)
+  })
+
+  it('keeps keyboard search and activation in the command palette', async () => {
+    const app = renderApp()
+    await waitForFrame(app, 'DARK / OVERVIEW')
+
+    app.stdin.write('\u0010') // Ctrl+P
+    await waitForFrame(app, 'Click a command to run it')
+    for (const character of 'open workflow') {
+      app.stdin.write(character)
+      await settle(15)
+    }
+    await waitForFrame(app, 'open workflow')
+    await waitForFrame(app, 'Open workflow')
+    await pressUntilFrame(app, '\r', 'WORKFLOW / 02')
+    await waitForFrame(app, 'Choose a neutral test track')
+  })
+
+  it('selects a control with the mouse and activates the current selection', async () => {
+    const app = renderApp()
+    await waitForFrame(app, 'DARK / OVERVIEW')
+    await clickText(app, 'Open control bench')
+    await waitForFrame(app, 'CONTROL DESK')
+
+    await clickText(app, 'Find')
+    await waitForFrame(app, 'SearchInput + SelectableList')
+    await clickText(app, 'Focus tree')
+    await clickText(app, 'Open selected')
+    await waitForFrame(app, 'Opened focus.')
+  })
+
+  it('selects and advances the workflow with the mouse, including cancel', async () => {
+    const app = renderApp()
+    await waitForFrame(app, 'DARK / OVERVIEW')
+    await clickText(app, '02  Workflow · ChoicePrompt into StepFlow')
+    await waitForFrame(app, 'Choose a neutral test track')
+
+    await clickText(app, 'Cancel workflow')
+    await waitForFrame(app, 'No workflow started.')
+    await clickText(app, 'Process probe')
+    await waitForFrame(app, 'StepFlow / shared step context')
+    await waitForFrame(app, 'Current track: Process probe')
+
+    await clickText(app, 'Next')
+    await waitForFrame(app, '[2/3] Configure')
+    await clickText(app, 'Next')
+    await waitForFrame(app, '[3/3] Review')
+    await clickText(app, 'Finish')
+    await waitForFrame(app, 'Flow complete: Process probe.')
+  })
+
+  it('keeps route and shell actions clickable in a short layout', async () => {
+    const app = renderApp()
+    setTtyRows(app, 18)
+    await waitForFrame(app, 'DARK / OVERVIEW')
+    expect(frameText(app)).not.toContain('FIELD GUIDE')
+
+    await clickText(app, 'Workflow')
+    await waitForFrame(app, 'WORKFLOW / 02')
+    await clickText(app, 'Home')
+    await waitForFrame(app, 'DARK / OVERVIEW')
+  })
+
+  it('keeps every Interaction tab inside a short terminal with clickable navigation', async () => {
+    const app = renderApp()
+    setTtyRows(app, 18)
+    await waitForFrame(app, 'DARK / OVERVIEW')
+
+    await pressUntilFrame(app, '4', 'INPUT LAB / 04')
+
+    // Every Interaction tab must fit the mocked terminal; a taller tab makes
+    // Ink scroll and leaves the tab row and hitboxes misaligned.
+    const arrowRight = '\u001b[C'
+    const interactionTabFrames = [
+      { key: '', expected: 'FocusTree / zones + roving groups' },
+      { key: arrowRight, expected: 'EventTracer + KeyboardDebugInspector' },
+      { key: arrowRight, expected: 'MouseLayout / measured targets' },
+      { key: arrowRight, expected: 'Experimental / explicitly labeled' },
+    ]
+    for (const tab of interactionTabFrames) {
+      if (tab.key) await pressUntilFrame(app, tab.key, tab.expected)
+      await waitForFrame(app, tab.expected)
+      expect(frameRowCount(app)).toBeLessThanOrEqual(18)
+    }
+
+    // Tab and route navigation must remain clickable after the tab cycle.
+    await clickText(app, 'Focus tree')
+    await waitForFrame(app, 'FocusTree / zones + roving groups')
+    await clickText(app, 'Home')
+    await waitForFrame(app, 'DARK / OVERVIEW')
+  })
+
   it('drives the ChoicePrompt -> StepFlow selection flow to completion', async () => {
     const app = renderApp()
     await waitForFrame(app, 'DARK / OVERVIEW')
@@ -371,7 +659,7 @@ describe('ShowcaseApp package-consumer smoke', () => {
       () => {
         expect(
           enableWrite.mock.calls.some(([frame]) =>
-            frame.includes('\u001b[?1000h\u001b[?1006h'),
+            frame.includes('\u001b[?1003h\u001b[?1006h'),
           ),
         ).toBe(true)
       },
@@ -381,7 +669,7 @@ describe('ShowcaseApp package-consumer smoke', () => {
     await pressUntilFrame(app, '4', 'INPUT LAB / 04')
     const arrowRight = String.fromCharCode(27) + '[C'
     await pressUntilFrame(app, arrowRight, 'EventTracer + KeyboardDebugInspector')
-    await pressUntilFrame(app, arrowRight, 'MouseLayout / automatic targets')
+    await pressUntilFrame(app, arrowRight, 'MouseLayout / measured targets')
     await waitForFrame(app, 'Button activations: 0')
     await waitForFrame(app, 'Keyboard focus: 01 / Overview')
     expect(frameRowCount(app)).toBeLessThanOrEqual(24)
@@ -443,7 +731,7 @@ describe('ShowcaseApp package-consumer smoke', () => {
       { timeout: 3000, interval: 25 },
     )
     expect(frameText(app)).not.toContain('FIELD GUIDE')
-    expect(frameText(app)).not.toContain('RUNEFRAME / FEATURE LAB')
+    expect(frameText(app)).toContain('RUNEFRAME / FEATURE LAB')
 
     setTtyRows(app, 40)
     await vi.waitFor(
@@ -453,6 +741,85 @@ describe('ShowcaseApp package-consumer smoke', () => {
     expect(frameText(app)).toContain('RUNEFRAME / FEATURE LAB')
     expect(frameText(app)).toContain('DARK / INTERACTIONS')
     expect(frameText(app)).toContain('FIELD GUIDE')
+  })
+
+  it('shows hover feedback on the selected and focused Mouse List row without activating it', () =>
+    withColorOutput(async () => {
+      const source = createFakeMouseEventSource()
+      const node = <ShowcaseApp mouseEventSource={source} />
+      const app = render(node)
+      activeRenders.push(app)
+      app.stdout.setMaxListeners(0)
+      setTtyRows(app, 40, node)
+      await waitForFrame(app, 'DARK / OVERVIEW')
+
+      await pressUntilFrame(app, '4', 'INPUT LAB / 04')
+      await pressUntilFrame(app, '\u001b[C', 'EventTracer + KeyboardDebugInspector')
+      await pressUntilFrame(app, '\u001b[C', 'MouseLayout / measured targets')
+      await waitForFrame(app, 'Keyboard focus: 01 / Overview · route map')
+
+      const selectedRow = '01 / Overview · route map'
+      const cell = cellForText(app, selectedRow)
+      const beforeHover = app.lastFrame() ?? ''
+      emitSourceMove(source, 'none', cell)
+      await settle()
+
+      const afterHover = app.lastFrame() ?? ''
+      expect(afterHover).not.toBe(beforeHover)
+      expect(afterHover).toContain('\u001b[4m')
+      expect(frameText(app)).toContain('Keyboard focus: 01 / Overview · route map')
+      expect(frameText(app)).toContain('List activations: 0')
+    }),
+  )
+
+  it('resets brand hover when a toast moves the measured target, then tracks its new row', async () => {
+    const source = createFakeMouseEventSource()
+    const node = <ShowcaseApp mouseEventSource={source} />
+    const app = render(node)
+    activeRenders.push(app)
+    app.stdout.setMaxListeners(0)
+    setTtyRows(app, 24, node)
+    await waitForFrame(app, 'DARK / OVERVIEW')
+
+    await pressUntilFrame(app, '4', 'INPUT LAB / 04')
+    await pressUntilFrame(app, '\u001b[C', 'EventTracer + KeyboardDebugInspector')
+    await pressUntilFrame(app, '\u001b[C', 'MouseLayout / measured targets')
+    await waitForFrame(app, 'Hover + drag / app name in the top bar')
+
+    const brand = 'RUNEFRAME / FEATURE LAB'
+    const originalCell = cellForText(app, brand)
+    emitSourceMove(source, 'none', originalCell)
+    await waitForFrame(
+      app,
+      `Pointer over app name at ${originalCell.column}, ${originalCell.row}.`,
+    )
+    await waitForFrame(app, '● hover')
+
+    await pressUntilFrame(app, 'f', 'Toast provider is live.')
+    await waitForFrame(app, 'Move over the app name above to test hover.')
+    expect(frameText(app)).toContain('○ hover')
+
+    const shiftedCell = cellForText(app, brand)
+    expect(shiftedCell.row).toBe(originalCell.row + 1)
+    emitSourceMove(source, 'none', shiftedCell)
+    await waitForFrame(
+      app,
+      `Pointer over app name at ${shiftedCell.column}, ${shiftedCell.row}.`,
+    )
+    await waitForFrame(app, '● hover')
+  })
+
+  it('describes terminal and Windows mouse input accurately', async () => {
+    const app = renderApp()
+    setTtyRows(app, 40)
+    await waitForFrame(app, 'DARK / OVERVIEW')
+
+    await pressUntilFrame(app, '4', 'INPUT LAB / 04')
+    await pressUntilFrame(app, '\u001b[C', 'EventTracer + KeyboardDebugInspector')
+    await pressUntilFrame(app, '\u001b[C', 'MouseLayout / measured targets')
+    await waitForFrame(app, 'Terminal mouse reports use SGR')
+
+    expect(frameText(app)).toContain('Windows host normalizes native events.')
   })
 
   it('reports Mouse contract click geometry through routing diagnostics', async () => {
@@ -470,7 +837,7 @@ describe('ShowcaseApp package-consumer smoke', () => {
 
     await pressUntilFrame(app, '4', 'INPUT LAB / 04')
     await pressUntilFrame(app, '\u001b[C', 'EventTracer + KeyboardDebugInspector')
-    await pressUntilFrame(app, '\u001b[C', 'MouseLayout / automatic targets')
+    await pressUntilFrame(app, '\u001b[C', 'MouseLayout / measured targets')
     await waitForFrame(app, 'Button activations: 0')
     await settle(100)
 
@@ -564,7 +931,7 @@ describe('ShowcaseApp package-consumer smoke', () => {
     // Keyboard input keeps flowing through Ink on this lane.
     await pressUntilFrame(app, '4', 'INPUT LAB / 04')
     await pressUntilFrame(app, '\u001b[C', 'EventTracer + KeyboardDebugInspector')
-    await pressUntilFrame(app, '\u001b[C', 'MouseLayout / automatic targets')
+    await pressUntilFrame(app, '\u001b[C', 'MouseLayout / measured targets')
     await waitForFrame(app, 'Button activations: 0')
     await settle(100)
 
@@ -635,35 +1002,115 @@ describe('ShowcaseApp package-consumer smoke', () => {
     expect(events.length).toBe(diagnosticsBefore)
   })
 
-  it('demonstrates automatic targets while keeping MouseArea explicit and click-only', async () => {
+  it('routes measured hover, drag completion and cancellation from the public event source', async () => {
+    const events: MouseRoutingDiagnostic[] = []
+    const source = createFakeMouseEventSource()
+    const node = (
+      <ShowcaseApp
+        mouseDiagnostics={(event) => events.push(event)}
+        mouseEventSource={source}
+      />
+    )
+    const app = render(node)
+    activeRenders.push(app)
+    app.stdout.setMaxListeners(0)
+    setTtyRows(app, 24, node)
+    await waitForFrame(app, 'DARK / OVERVIEW')
+    await pressUntilFrame(app, '4', 'INPUT LAB / 04')
+    await pressUntilFrame(app, '\u001b[C', 'EventTracer + KeyboardDebugInspector')
+    await pressUntilFrame(app, '\u001b[C', 'MouseLayout / measured targets')
+    await waitForFrame(app, 'Hover + drag / app name in the top bar')
+
+    const brand = 'RUNEFRAME / FEATURE LAB'
+    const brandCell = cellForText(app, brand)
+    emitSourceMove(source, 'none', brandCell)
+    await waitForFrame(
+      app,
+      `Pointer over app name at ${brandCell.column}, ${brandCell.row}.`,
+    )
+
+    const hover = events.find(
+      (event) =>
+        event.action === 'move' &&
+        event.x === brandCell.column &&
+        event.y === brandCell.row &&
+        event.targetId !== null,
+    )
+    expect(hover).toBeDefined()
+    const measuredBrand = hover!.areas.find((area) => area.id === hover!.targetId)
+    expect(measuredBrand?.bounds).toEqual({
+      x: 0,
+      y: 0,
+      width: brand.length,
+      height: 1,
+    })
+
+    const outsideBrand = { column: brand.length + 2, row: brandCell.row }
+    emitSourceMove(source, 'none', outsideBrand)
+    await waitForFrame(
+      app,
+      `Pointer left at ${outsideBrand.column}, ${outsideBrand.row}.`,
+    )
+
+    // The press cell becomes the drag origin; motion outside the measured box
+    // still reaches the captured area, and release finishes rather than clicks.
+    emitSourceButton(source, 'press', brandCell)
+    const firstDragCell = {
+      column: brandCell.column + 1,
+      row: brandCell.row,
+    }
+    emitSourceMove(source, 'left', firstDragCell)
+    await waitForFrame(
+      app,
+      `Dragging ${brandCell.column}, ${brandCell.row} → ${firstDragCell.column}, ${firstDragCell.row}.`,
+    )
+    emitSourceMove(source, 'left', outsideBrand)
+    await waitForFrame(
+      app,
+      `Dragging ${brandCell.column}, ${brandCell.row} → ${outsideBrand.column}, ${outsideBrand.row}.`,
+    )
+    emitSourceButton(source, 'release', outsideBrand)
+    await waitForFrame(
+      app,
+      `Drag ended at ${outsideBrand.column}, ${outsideBrand.row} from ${brandCell.column}, ${brandCell.row}.`,
+    )
+
+    // Replacing the input source is a supported cancellation path while the
+    // measured area remains mounted and registered.
+    emitSourceButton(source, 'press', brandCell)
+    emitSourceMove(source, 'left', firstDragCell)
+    await waitForFrame(app, 'Dragging')
+    const replacementSource = createFakeMouseEventSource()
+    app.rerender(
+      <ShowcaseApp
+        mouseDiagnostics={(event) => events.push(event)}
+        mouseEventSource={replacementSource}
+      />,
+    )
+    await waitForFrame(
+      app,
+      `Drag cancelled at ${firstDragCell.column}, ${firstDragCell.row} from ${brandCell.column}, ${brandCell.row}.`,
+    )
+    expect(events.some((event) => event.reason === 'drag-start')).toBe(true)
+    expect(events.some((event) => event.reason === 'drag-end')).toBe(true)
+  })
+
+  it('shows measured hover and drag feedback over the rendered app name', async () => {
     const app = renderApp()
     await waitForFrame(app, 'DARK / OVERVIEW')
 
     await pressUntilFrame(app, '4', 'INPUT LAB / 04')
     const arrowRight = '\u001b[C'
     await pressUntilFrame(app, arrowRight, 'EventTracer + KeyboardDebugInspector')
-    await pressUntilFrame(app, arrowRight, 'MouseLayout / automatic targets')
-
-    // The full shell keeps its bars visible at 24 rows, so use its measured
-    // viewport to reveal the lower MouseArea example rather than assuming it
-    // is in the initial frame.
-    for (let step = 0; step < 20 && !frameText(app).includes('demo target'); step++) {
-      const beforeWheel = frameText(app)
-      wheelDownInShell(app)
-      await vi.waitFor(
-        () => expect(frameText(app)).not.toBe(beforeWheel),
-        { timeout: 3000, interval: 25 },
-      )
-    }
+    await pressUntilFrame(app, arrowRight, 'MouseLayout / measured targets')
 
     const frame = frameText(app)
     expect(frame).toContain('RUNEFRAME / FEATURE LAB')
     expect(frame).toContain('DARK / INTERACTIONS')
     expect(frameRowCount(app)).toBeLessThanOrEqual(24)
-    expect(frame).toContain('demo target')
-    expect(frame).toContain('MouseLayout / automatic targets')
+    expect(frame).toContain('Hover + drag / app name in the top bar')
+    expect(frame).toContain('MouseLayout / measured targets')
     expect(frame).toContain('Scrollable List / 7 rows')
-    expect(frame).toContain('MouseArea is click-only: no hover, drag, or wheel.')
   })
 
   it('renders the experimental subpath demo', async () => {
@@ -672,7 +1119,7 @@ describe('ShowcaseApp package-consumer smoke', () => {
 
     await pressUntilFrame(app, '4', 'INPUT LAB / 04')
     await pressUntilFrame(app, '\u001b[C', 'EventTracer + KeyboardDebugInspector')
-    await pressUntilFrame(app, '\u001b[C', 'MouseLayout / automatic targets')
+    await pressUntilFrame(app, '\u001b[C', 'MouseLayout / measured targets')
     await pressUntilFrame(app, '\u001b[C', 'Experimental / explicitly labeled')
     expect(frameText(app)).toContain('KeyboardRegistry is experimental metadata')
   })

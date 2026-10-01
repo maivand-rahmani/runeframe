@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Text } from 'ink'
 import type { ReactElement } from 'react'
 import stripAnsi from 'strip-ansi'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { FrameworkProvider } from '../../FrameworkProvider.js'
@@ -18,6 +19,11 @@ function renderInTheme(ui: ReactElement) {
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
 }
+
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
 
 function findMarker(frame: string, marker: string): { x: number; y: number } {
   const lines = stripAnsi(frame).split('\n')
@@ -36,6 +42,15 @@ async function clickAt(
   stdin.write(`\u001B[<0;${x + 1};${y + 1}M`)
   await delay()
   stdin.write(`\u001B[<0;${x + 1};${y + 1}m`)
+  await delay()
+}
+
+async function moveAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<35;${x + 1};${y + 1}M`)
   await delay()
 }
 
@@ -103,6 +118,7 @@ describe('ModalDialog', () => {
   })
 
   it('activates footer handlers with mouse and consumes disabled actions', async () => {
+    chalk.level = 1
     const onSave = vi.fn()
     const onCancel = vi.fn()
     const onDisabled = vi.fn()
@@ -146,6 +162,13 @@ describe('ModalDialog', () => {
 
     await delay()
     let marker = findMarker(lastFrame() ?? '', 'Save')
+    const initial = lastFrame() ?? ''
+    await moveAt(stdin, marker.x, marker.y)
+    const hovered = lastFrame() ?? ''
+    expect(hovered).not.toBe(initial)
+    expect(stripAnsi(hovered)).toBe(stripAnsi(initial))
+    expect(onSave).not.toHaveBeenCalled()
+
     await clickAt(stdin, marker.x, marker.y)
     expect(onSave).toHaveBeenCalledTimes(1)
 
@@ -154,6 +177,8 @@ describe('ModalDialog', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
 
     marker = findMarker(lastFrame() ?? '', 'Locked')
+    await moveAt(stdin, marker.x, marker.y)
+    expect(lastFrame()).toBe(initial)
     await clickAt(stdin, marker.x, marker.y)
     expect(onDisabled).not.toHaveBeenCalled()
   })

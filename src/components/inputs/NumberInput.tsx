@@ -43,7 +43,13 @@ export function NumberInput({
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
   const inputFocus = useInputFocus()
-  const mouseRef = useAutoMouseArea({ onClick: inputFocus.focus })
+  const [hovered, setHovered] = useState(false)
+  const mouseRef = useAutoMouseArea({
+    onClick: inputFocus.focus,
+    onEnter: () => setHovered(true),
+    onLeave: () => setHovered(false),
+  })
+  const showHoverCue = hovered
 
   useEffect(() => {
     if (isControlled && controlledValue !== undefined) {
@@ -192,7 +198,9 @@ export function NumberInput({
   return (
     <Box ref={mouseRef}>
       <Text color={colors.focus.ring}>[</Text>
-      <Text color={colors.text.primary}> {labelText}{shownValue} </Text>
+      <Text color={colors.text.primary} underline={showHoverCue}>
+        {' '}{labelText}{shownValue}{' '}
+      </Text>
       <Text color={colors.focus.ring}>|</Text>
       <Text color={colors.focus.ring}>]</Text>
     </Box>

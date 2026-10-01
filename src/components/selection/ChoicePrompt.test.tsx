@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { render } from 'ink-testing-library'
 import { useEffect, type ReactNode } from 'react'
 import type { ReactElement } from 'react'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useKeyboardScope } from '../../interaction/keyboard/KeyboardScopeProvider.js'
@@ -33,6 +34,20 @@ function cellInFrame(frame: string | undefined, text: string) {
   return { x: lines[y].indexOf(text), y }
 }
 
+function isUnderlined(frame: string | undefined) {
+  return /\u001B\[(?:\d+;)*4(?:;\d+)*m/.test(frame ?? '')
+}
+
+async function withColorOutput(run: () => Promise<void>) {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
+}
+
 async function clickCell(
   stdin: { write: (data: string) => unknown },
   cell: { x: number; y: number },
@@ -42,6 +57,19 @@ async function clickCell(
   stdin.write(`\u001B[<0;${x};${y}M`)
   await delay()
   stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+async function moveCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<35;${cell.x + 1};${cell.y + 1}M`)
+  await delay()
+}
+
+async function moveOutside(stdin: { write: (data: string) => unknown }) {
+  stdin.write('\u001B[<35;50;50M')
   await delay()
 }
 
@@ -198,6 +226,60 @@ describe('ChoicePrompt', () => {
     stdin.write('b') // should not select disabled item
     await delay()
     expect(selected).toHaveLength(0)
+  })
+
+  it('auto hover does not select or change the active choice', async () => {
+    const selected: string[] = []
+    const { stdin, lastFrame } = render(
+      <FrameworkProvider registry={interactionRegistry} defaultScreen="test">
+        <ListScope>
+          <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+            <ChoicePrompt
+              items={itemsWithDisabled}
+              onSelect={(item) => selected.push(item.value)}
+            />
+          </MouseLayout>
+        </ListScope>
+      </FrameworkProvider>,
+    )
+
+    await delay(120)
+    await moveCell(stdin, cellInFrame(lastFrame(), 'Enabled A'))
+    await moveCell(stdin, cellInFrame(lastFrame(), 'Disabled B'))
+    await moveCell(stdin, cellInFrame(lastFrame(), 'Enabled C'))
+    expect(selected).toEqual([])
+
+    await moveOutside(stdin)
+    stdin.write('\r')
+    await delay()
+    expect(selected).toEqual(['a'])
+  })
+
+  it('keeps the active choice underlined on hover without selecting it', async () => {
+    await withColorOutput(async () => {
+      const selected: string[] = []
+      const { stdin, lastFrame } = render(
+        <FrameworkProvider registry={interactionRegistry} defaultScreen="test">
+          <ListScope>
+            <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+              <ChoicePrompt
+                items={sampleItems}
+                onSelect={(item) => selected.push(item.value)}
+              />
+            </MouseLayout>
+          </ListScope>
+        </FrameworkProvider>,
+      )
+
+      await delay(120)
+      await moveCell(stdin, cellInFrame(lastFrame(), 'Alpha'))
+      expect(isUnderlined(lastFrame())).toBe(true)
+      expect(selected).toEqual([])
+
+      stdin.write('\r')
+      await delay()
+      expect(selected).toEqual(['alpha'])
+    })
   })
 
   it('navigates up with arrow up', async () => {

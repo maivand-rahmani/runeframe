@@ -1,10 +1,11 @@
 import { useState, type ReactElement } from 'react'
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { CommandInput, type CommandInputProps } from './CommandInput.js'
 import stripAnsi from 'strip-ansi'
+import chalk from 'chalk'
 import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
@@ -44,6 +45,15 @@ async function clickAt(
   await delay()
 }
 
+async function moveAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<35;${x + 1};${y + 1}M`)
+  await delay()
+}
+
 function StatefulCommandInput({
   onChange,
   ...props
@@ -64,6 +74,11 @@ function StatefulCommandInput({
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
 }
+
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
 
 async function typeChars(
   stdin: { write: (d: string) => void },
@@ -229,5 +244,79 @@ describe('CommandInput', () => {
     expect(firstSubmit).not.toHaveBeenCalled()
     expect(secondChange).toHaveBeenCalledWith('x')
     expect(secondSubmit).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a hover cue without moving keyboard focus', async () => {
+    chalk.level = 1
+    const firstChange = vi.fn()
+    const secondChange = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <StatefulCommandInput
+          mode="command"
+          placeholder="first command"
+          onChange={firstChange}
+          onSubmit={() => {}}
+        />
+        <StatefulCommandInput
+          mode="command"
+          placeholder="second command"
+          onChange={secondChange}
+          onSubmit={() => {}}
+        />
+      </MouseLayout>,
+    )
+
+    await delay()
+    const initial = lastFrame() ?? ''
+    const second = findMarker(initial, 'second command')
+    await moveAt(stdin, second.x, second.y)
+    const hovered = lastFrame() ?? ''
+    expect(hovered).not.toBe(initial)
+    expect(stripAnsi(hovered)).toBe(stripAnsi(initial))
+
+    await moveAt(stdin, 50, 50)
+    expect(lastFrame()).toBe(initial)
+
+    stdin.write('x')
+    await delay()
+    expect(firstChange).toHaveBeenCalledWith('x')
+    expect(secondChange).not.toHaveBeenCalled()
+
+    await clickAt(stdin, second.x, second.y)
+    stdin.write('y')
+    await delay()
+    expect(secondChange).toHaveBeenCalledWith('y')
+  })
+
+  it('shows the hover cue on the auto-focused command field without activating it', async () => {
+    chalk.level = 1
+    const onChange = vi.fn()
+    const onSubmit = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <CommandInput
+          mode="command"
+          value=""
+          onChange={onChange}
+          onSubmit={onSubmit}
+          placeholder="focused command"
+        />
+      </MouseLayout>,
+    )
+
+    await delay()
+    const initial = lastFrame() ?? ''
+    const field = findMarker(initial, 'focused command')
+    await moveAt(stdin, field.x, field.y)
+    const hovered = lastFrame() ?? ''
+    expect(hovered).not.toBe(initial)
+    expect(stripAnsi(hovered)).toBe(stripAnsi(initial))
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    stdin.write('x')
+    await delay()
+    expect(onChange).toHaveBeenCalledWith('x')
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 })

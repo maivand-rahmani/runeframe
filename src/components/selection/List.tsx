@@ -1,10 +1,14 @@
 import {
+  Children,
+  cloneElement,
+  isValidElement,
   useRef,
   useEffect,
   useLayoutEffect,
   useCallback,
   useState,
   type ReactElement,
+  type ReactNode,
 } from 'react'
 import { Box, Text } from 'ink'
 import {
@@ -39,7 +43,7 @@ export interface ListProps<T extends ListItem> {
   mouseBoundsForItem?: (item: T, index: number) => MouseBounds | undefined
   renderItem?: (
     item: T,
-    state: { focused: boolean; selected: boolean },
+    state: { focused: boolean; selected: boolean; hovered: boolean },
   ) => ReactElement
 }
 
@@ -235,7 +239,11 @@ export function List<T extends ListItem>({
                 renderItem as
                   | ((
                       item: ListItem,
-                      state: { focused: boolean; selected: boolean },
+                      state: {
+                        focused: boolean
+                        selected: boolean
+                        hovered: boolean
+                      },
                     ) => ReactElement)
                   | undefined
               }
@@ -265,7 +273,7 @@ interface ListItemRowProps {
   onAutoMouseSelect?: (id: string, focusItem: () => void) => void
   renderItem?: (
     item: ListItem,
-    state: { focused: boolean; selected: boolean },
+    state: { focused: boolean; selected: boolean; hovered: boolean },
   ) => ReactElement
 }
 
@@ -283,24 +291,32 @@ function ListItemRow({
   const { colors } = useTheme()
   const { focused, onActivate } = useFocusable({ id: item.id })
   const isSelected = selectedId === item.id
+  const [hovered, setHovered] = useState(false)
 
   if (!visible) return null
 
   let rowContents: ReactElement
   let flexDirection: 'column' | undefined
   if (renderItem) {
-    rowContents = renderItem(item, { focused, selected: isSelected })
+    const renderedItem = renderItem(item, {
+      focused,
+      selected: isSelected,
+      hovered,
+    })
+    rowContents = hovered ? underlineText(renderedItem) : renderedItem
   } else {
     const labelColor = focused
       ? colors.focus.ring
       : isSelected
         ? colors.focus.active
-        : colors.text.primary
+        : hovered
+          ? colors.focus.selected
+          : colors.text.primary
 
     rowContents = (
       <>
         <Box>
-          <Text color={labelColor} bold={isSelected}>
+          <Text color={labelColor} bold={isSelected} underline={hovered}>
             {isSelected ? '• ' : '  '}
             {item.label}
           </Text>
@@ -322,6 +338,8 @@ function ListItemRow({
     return (
       <MouseArea
         bounds={mouseBounds}
+        onEnter={() => setHovered(true)}
+        onLeave={() => setHovered(false)}
         onClick={() =>
           onMouseSelect?.(item.id, index, onActivate, mouseBounds)
         }
@@ -336,6 +354,8 @@ function ListItemRow({
       <AutoListItemRow
         flexDirection={flexDirection}
         onClick={() => onAutoMouseSelect?.(item.id, onActivate)}
+        onEnter={() => setHovered(true)}
+        onLeave={() => setHovered(false)}
       >
         {rowContents}
       </AutoListItemRow>
@@ -345,16 +365,45 @@ function ListItemRow({
   return <Box flexDirection={flexDirection}>{rowContents}</Box>
 }
 
+/**
+ * Custom rows keep control of their colors and layout, while still getting an
+ * orthogonal hover cue. Walking the returned Ink tree avoids adding a marker
+ * column or changing the row's measured mouse target.
+ */
+function underlineText(node: ReactElement): ReactElement {
+  const element = node as ReactElement<{
+    children?: ReactNode
+    underline?: boolean
+  }>
+  const children =
+    element.props.children === undefined
+      ? undefined
+      : Children.map(element.props.children, (child) =>
+          isValidElement(child) ? underlineText(child) : child,
+        )
+
+  if (node.type === Text) {
+    return cloneElement(element, { underline: true, children })
+  }
+
+  if (children === undefined) return node
+  return cloneElement(element, { children })
+}
+
 function AutoListItemRow({
   children,
   flexDirection,
   onClick,
+  onEnter,
+  onLeave,
 }: {
   children: ReactElement
   flexDirection?: 'column'
   onClick: () => void
+  onEnter: () => void
+  onLeave: () => void
 }) {
-  const ref = useAutoMouseArea({ onClick })
+  const ref = useAutoMouseArea({ onClick, onEnter, onLeave })
   return (
     <Box ref={ref} flexDirection={flexDirection}>
       {children}

@@ -44,7 +44,6 @@ export function RadioList({
   onSelect,
   mouseBoundsForItem,
 }: RadioListProps) {
-  const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
   const mouseGeometry = useMouseGeometry()
   const mouseRegistry = useMouseRegistry()
@@ -214,83 +213,121 @@ export function RadioList({
       {options.map((opt, idx) => {
         const isFocused = idx === focusIndex
         const isSelected = selected === opt.value
-        const isDisabled = Boolean(opt.disabled)
-
-        const bulletColor = isDisabled
-          ? colors.text.muted
-          : isSelected
-            ? colors.focus.active
-            : isFocused
-              ? colors.focus.ring
-              : colors.text.secondary
-
-        const labelColor = isDisabled
-          ? colors.text.muted
-          : isSelected
-            ? colors.focus.active
-            : isFocused
-              ? colors.focus.ring
-              : colors.text.primary
-
-        const rowContents = (
-          <>
-            <Text color={bulletColor} dimColor={isDisabled}>
-              {isSelected ? '•' : '○'}
-            </Text>
-            <Text
-              color={labelColor}
-              bold={isFocused || isSelected}
-              dimColor={isDisabled}
-            >
-              {' '}
-              {opt.label}
-            </Text>
-          </>
-        )
         const mouseBounds = mouseBoundsForItem?.(opt, idx)
         const rowKey = `${opt.value}:${idx}`
 
-        if (mouseBounds != null) {
-          return (
-            <MouseArea
-              key={rowKey}
-              bounds={mouseBounds}
-              disabled={isDisabled}
-              onClick={() => handleMouseSelect(opt, idx, mouseBounds)}
-            >
-              <Box>{rowContents}</Box>
-            </MouseArea>
-          )
-        }
-
-        if (autoMouseEnabled) {
-          return (
-            <RadioListAutoRow
-              key={rowKey}
-              disabled={isDisabled}
-              onClick={() => handleAutoMouseSelect(opt, idx)}
-            >
-              {rowContents}
-            </RadioListAutoRow>
-          )
-        }
-
-        return <Box key={rowKey}>{rowContents}</Box>
+        return (
+          <RadioListRow
+            key={rowKey}
+            option={opt}
+            focused={isFocused}
+            selected={isSelected}
+            autoMouseEnabled={autoMouseEnabled}
+            mouseBounds={mouseBounds}
+            onClick={() =>
+              mouseBounds != null
+                ? handleMouseSelect(opt, idx, mouseBounds)
+                : handleAutoMouseSelect(opt, idx)
+            }
+          />
+        )
       })}
     </MouseLayout>
   )
+}
+
+function RadioListRow({
+  option,
+  focused,
+  selected,
+  autoMouseEnabled,
+  mouseBounds,
+  onClick,
+}: {
+  option: RadioListOption
+  focused: boolean
+  selected: boolean
+  autoMouseEnabled: boolean
+  mouseBounds?: MouseBounds
+  onClick: () => void
+}) {
+  const { colors } = useTheme()
+  const [hovered, setHovered] = useState(false)
+  const disabled = Boolean(option.disabled)
+  const color = disabled
+    ? colors.text.muted
+    : selected
+      ? colors.focus.active
+      : focused
+        ? colors.focus.ring
+        : hovered
+          ? colors.focus.selected
+          : undefined
+  const rowContents = (
+    <>
+      <Text
+        color={color ?? colors.text.secondary}
+        dimColor={disabled}
+        underline={hovered && !disabled}
+      >
+        {selected ? '•' : '○'}
+      </Text>
+      <Text
+        color={color ?? colors.text.primary}
+        bold={focused || selected}
+        dimColor={disabled}
+        underline={hovered && !disabled}
+      >
+        {' '}
+        {option.label}
+      </Text>
+    </>
+  )
+
+  if (mouseBounds != null) {
+    return (
+      <MouseArea
+        bounds={mouseBounds}
+        disabled={disabled}
+        onEnter={() => setHovered(true)}
+        onLeave={() => setHovered(false)}
+        onClick={onClick}
+      >
+        <Box>{rowContents}</Box>
+      </MouseArea>
+    )
+  }
+
+  if (autoMouseEnabled) {
+    return (
+      <RadioListAutoRow
+        disabled={disabled}
+        onClick={onClick}
+        onEnter={() => setHovered(true)}
+        onLeave={() => setHovered(false)}
+      >
+        {rowContents}
+      </RadioListAutoRow>
+    )
+  }
+
+  return <Box>{rowContents}</Box>
 }
 
 function RadioListAutoRow({
   children,
   disabled,
   onClick,
+  onEnter,
+  onLeave,
 }: {
   children: ReactNode
   disabled: boolean
   onClick: () => void
+  onEnter: () => void
+  onLeave: () => void
 }) {
-  const ref = useAutoMouseArea({ disabled, onClick })
+  const ref = useAutoMouseArea({ disabled, onClick, onEnter, onLeave })
   return <Box ref={ref}>{children}</Box>
 }
 

@@ -44,6 +44,14 @@ function wheel(
   return { type: 'wheel', direction, x, y, shift: false, alt: false, ctrl: false }
 }
 
+function move(
+  button: 'left' | 'none',
+  x: number,
+  y: number,
+): NormalizedMouseEvent {
+  return { type: 'move', button, x, y, shift: false, alt: false, ctrl: false }
+}
+
 const PRESS_BYTES = ascii(`${ESC}[<0;12;7M`)
 const RELEASE_BYTES = ascii(`${ESC}[<0;12;7m`)
 const WHEEL_BYTES = ascii(`${ESC}[<64;3;4M`)
@@ -290,7 +298,7 @@ describe('createSgrInputMultiplexer', () => {
 
     source.emit(
       'data',
-      ascii(`${ESC}[<1;2;3M${ESC}[<32;1;1M${ESC}[<64;1;1m${ESC}[<128;1;1M`),
+      ascii(`${ESC}[<1;2;3M${ESC}[<33;1;1M${ESC}[<64;1;1m${ESC}[<128;1;1M`),
     )
     await tick()
 
@@ -657,6 +665,120 @@ describe('SgrInputMultiplexer delivery gates and lifecycle', () => {
     expect(events.at(-1)).toEqual(
       left('press', MAX_PENDING_MOUSE_EVENTS + 4, 0),
     )
+    mux.dispose()
+  })
+
+  it('coalesces a hover flood before subscription and keeps later press/release', () => {
+    const source = new FakeSource()
+    const mux = createMux(source)
+    const count = MAX_PENDING_MOUSE_EVENTS + 36
+    for (let index = 0; index < count; index++) {
+      source.emit('data', ascii(`${ESC}[<35;${index + 1};${index + 1}M`))
+    }
+    source.emit('data', PRESS_BYTES)
+    source.emit('data', RELEASE_BYTES)
+
+    const events = collectEvents(mux)
+    // The flood collapsed onto its newest sample while queued, so the queue
+    // never overflowed and the press/release pair survived intact.
+    expect(events).toEqual([
+      move('none', count - 1, count - 1),
+      left('press', 11, 6),
+      left('release', 11, 6),
+    ])
+    mux.dispose()
+  })
+
+  it('preserves press/release and the newest drag through a motion flood while the keyboard gate is closed', async () => {
+    const source = new FakeSource()
+    const mux = createMux(source)
+    const events = collectEvents(mux)
+    const count = MAX_PENDING_MOUSE_EVENTS + 40
+
+    source.emit('data', Buffer.concat([Buffer.from('a'), PRESS_BYTES]))
+    const moves: Buffer[] = []
+    for (let index = 0; index < count; index++) {
+      moves.push(ascii(`${ESC}[<32;${index + 2};2M`))
+    }
+    source.emit('data', Buffer.concat(moves))
+    source.emit('data', RELEASE_BYTES)
+
+    // The keyboard byte is still unread, so nothing may be published yet.
+    expect(events).toEqual([])
+
+    const out = collectKeyboard(mux.stdin)
+    await vi.waitFor(() => expect(events).toHaveLength(3), {
+      timeout: 2000,
+      interval: 10,
+    })
+    expect(out.text()).toBe('a')
+    // No synthetic loss: press first, newest drag sample, then release.
+    expect(events[0]).toEqual(left('press', 11, 6))
+    expect(events[1]).toEqual(move('left', count, 1))
+    expect(events[2]).toEqual(left('release', 11, 6))
+    mux.dispose()
+  })
+
+  it('sheds the oldest queued move on overflow before structural events', () => {
+    const source = new FakeSource()
+    const mux = createMux(source)
+    source.emit('data', PRESS_BYTES)
+    // Alternating drag/hover samples cannot coalesce, filling the queue to the
+    // cap with the structural press at its head.
+    for (let index = 0; index < MAX_PENDING_MOUSE_EVENTS - 1; index++) {
+      const code = index % 2 === 0 ? 32 : 35
+      source.emit('data', ascii(`${ESC}[<${code};${index + 1};1M`))
+    }
+    source.emit('data', RELEASE_BYTES)
+    source.emit('data', WHEEL_BYTES)
+
+    const events = collectEvents(mux)
+    expect(events).toHaveLength(MAX_PENDING_MOUSE_EVENTS)
+    // Both overflow drops shed moves, never the press/release/wheel.
+    expect(events[0]).toEqual(left('press', 11, 6))
+    expect(events[1]).toEqual(move('left', 2, 0))
+    expect(events.at(-2)).toEqual(left('release', 11, 6))
+    expect(events.at(-1)).toEqual(wheel('up', 2, 3))
+    mux.dispose()
+  })
+
+  it('keeps press/move/release/wheel order and only coalesces same-button move runs', () => {
+    const source = new FakeSource()
+    const mux = createMux(source)
+    source.emit(
+      'data',
+      Buffer.concat([
+        PRESS_BYTES,
+        ascii(`${ESC}[<35;1;1M`),
+        ascii(`${ESC}[<39;2;2M`),
+        ascii(`${ESC}[<32;3;3M`),
+        ascii(`${ESC}[<32;4;4M`),
+        WHEEL_BYTES,
+        ascii(`${ESC}[<35;5;5M`),
+        RELEASE_BYTES,
+      ]),
+    )
+
+    const events = collectEvents(mux)
+    // Same-button runs collapse onto their latest sample (coordinates and
+    // modifiers), a button change or wheel breaks the run, and structural
+    // events keep their stream position.
+    expect(events).toEqual([
+      left('press', 11, 6),
+      {
+        type: 'move',
+        button: 'none',
+        x: 1,
+        y: 1,
+        shift: true,
+        alt: false,
+        ctrl: false,
+      },
+      move('left', 3, 3),
+      wheel('up', 2, 3),
+      move('none', 4, 4),
+      left('release', 11, 6),
+    ])
     mux.dispose()
   })
 

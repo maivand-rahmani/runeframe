@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { Text } from 'ink'
 import type { ReactElement } from 'react'
 import { useTheme } from '../../design-system/ThemeProvider.js'
@@ -91,6 +91,7 @@ export function Breadcrumbs({
           id={item.id}
           title={item.title}
           color={color}
+          hoverColor={colors.focus.ring}
           onSelect={onSelect}
         />
       ) : (
@@ -120,17 +121,26 @@ function BreadcrumbMouseTarget({
   id,
   title,
   color,
+  hoverColor,
   onSelect,
 }: {
   id: string
   title: string
   color: string
+  hoverColor: string
   onSelect?: (screenId: string) => void
 }) {
-  const ref = useAutoMouseArea({ onClick: () => onSelect?.(id) })
+  const [hovered, setHovered] = useState(false)
+  const ref = useAutoMouseArea({
+    onClick: () => onSelect?.(id),
+    onEnter: () => setHovered(true),
+    onLeave: () => setHovered(false),
+  })
   return (
     <MouseLayout ref={ref}>
-      <Text color={color}>{title}</Text>
+      <Text color={hovered ? hoverColor : color} underline={hovered}>
+        {title}
+      </Text>
     </MouseLayout>
   )
 }

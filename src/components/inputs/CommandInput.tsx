@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { Box, Text } from 'ink'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useTheme } from '../../design-system/ThemeProvider.js'
@@ -27,7 +27,13 @@ export function CommandInput({
 }: CommandInputProps) {
   const { colors } = useTheme()
   const inputFocus = useInputFocus()
-  const mouseRef = useAutoMouseArea({ onClick: inputFocus.focus })
+  const [hovered, setHovered] = useState(false)
+  const mouseRef = useAutoMouseArea({
+    onClick: inputFocus.focus,
+    onEnter: () => setHovered(true),
+    onLeave: () => setHovered(false),
+  })
+  const showHoverCue = hovered
   const { suspend, restore } = useShellSuspension()
 
   useEffect(() => {
@@ -79,14 +85,22 @@ export function CommandInput({
 
   return (
     <Box ref={mouseRef}>
-      <Text color={colors.focus.ring}>{prompt}</Text>
+      <Text color={colors.focus.ring} underline={showHoverCue}>
+        {prompt}
+      </Text>
       <Text> </Text>
       {value.length > 0 ? (
-        <Text color={colors.text.primary}>{displayText}</Text>
+        <Text color={colors.text.primary} underline={showHoverCue}>
+          {displayText}
+        </Text>
       ) : (
-        <Text dimColor>{displayText}</Text>
+        <Text dimColor underline={showHoverCue}>
+          {displayText}
+        </Text>
       )}
-      <Text color={colors.focus.ring}>|</Text>
+      <Text color={colors.focus.ring} underline={showHoverCue}>
+        |
+      </Text>
     </Box>
   )
 }

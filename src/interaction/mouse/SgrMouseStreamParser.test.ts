@@ -34,6 +34,8 @@ const PRESS = `${ESC}[<0;12;7M`
 const RELEASE = `${ESC}[<0;12;7m`
 const WHEEL_UP = `${ESC}[<64;3;4M`
 const WHEEL_DOWN = `${ESC}[<65;9;2M`
+const MOVE_LEFT = `${ESC}[<32;5;6M`
+const MOVE_NONE = `${ESC}[<35;7;8M`
 
 const LEFT_PRESS: NormalizedMouseEvent = {
   type: 'press',
@@ -71,27 +73,57 @@ const WHEEL_DOWN_EVENT: NormalizedMouseEvent = {
   alt: false,
   ctrl: false,
 }
+const MOVE_LEFT_EVENT: NormalizedMouseEvent = {
+  type: 'move',
+  button: 'left',
+  x: 4,
+  y: 5,
+  shift: false,
+  alt: false,
+  ctrl: false,
+}
+const MOVE_NONE_EVENT: NormalizedMouseEvent = {
+  type: 'move',
+  button: 'none',
+  x: 6,
+  y: 7,
+  shift: false,
+  alt: false,
+  ctrl: false,
+}
 
 const SUPPORTED: ReadonlyArray<readonly [string, NormalizedMouseEvent]> = [
   [PRESS, LEFT_PRESS],
   [RELEASE, LEFT_RELEASE],
   [WHEEL_UP, WHEEL_UP_EVENT],
   [WHEEL_DOWN, WHEEL_DOWN_EVENT],
+  [MOVE_LEFT, MOVE_LEFT_EVENT],
+  [MOVE_NONE, MOVE_NONE_EVENT],
 ]
 
 const UNSUPPORTED = [
   `${ESC}[<1;2;3M`, // middle press
   `${ESC}[<2;2;3M`, // right press
+  `${ESC}[<3;2;3M`, // press without a button base
   `${ESC}[<3;2;3m`, // release without a button
-  `${ESC}[<32;2;3M`, // motion without a button
-  `${ESC}[<33;2;3M`, // motion + left
+  `${ESC}[<33;2;3M`, // middle-button motion
+  `${ESC}[<34;2;3M`, // right-button motion
+  `${ESC}[<32;2;3m`, // left motion in release form
+  `${ESC}[<35;2;3m`, // hover motion in release form
+  `${ESC}[<36;2;3m`, // left motion + shift in release form
+  `${ESC}[<37;2;3M`, // middle-button motion + shift
+  `${ESC}[<38;2;3M`, // right-button motion + shift
+  `${ESC}[<39;2;3m`, // hover motion + shift in release form
   `${ESC}[<64;2;3m`, // wheel up in release form
   `${ESC}[<65;2;3m`, // wheel down in release form
   `${ESC}[<66;2;3M`, // wheel left
   `${ESC}[<67;2;3M`, // wheel right
   `${ESC}[<96;2;3M`, // wheel up + motion
   `${ESC}[<97;2;3M`, // wheel down + motion
+  `${ESC}[<100;2;3M`, // wheel up + motion + shift
+  `${ESC}[<101;2;3M`, // wheel down + motion + shift
   `${ESC}[<128;2;3M`, // extra button bit
+  `${ESC}[<160;2;3M`, // extra button bit + motion
 ]
 
 const MIXED_KEYBOARD = Buffer.concat([
@@ -104,12 +136,20 @@ const MIXED_STREAM = Buffer.concat([
   ascii(`${ESC}[A`),
   Buffer.from('héllo 🚀', 'utf8'),
   ascii(`${ESC}[1;5C`),
+  ascii(MOVE_NONE),
   ascii(PRESS),
   Buffer.from('q', 'utf8'),
+  ascii(MOVE_LEFT),
   ascii(WHEEL_DOWN),
   ascii(RELEASE),
 ])
-const MIXED_EVENTS = [LEFT_PRESS, WHEEL_DOWN_EVENT, LEFT_RELEASE]
+const MIXED_EVENTS = [
+  MOVE_NONE_EVENT,
+  LEFT_PRESS,
+  MOVE_LEFT_EVENT,
+  WHEEL_DOWN_EVENT,
+  LEFT_RELEASE,
+]
 
 describe('SgrMouseStreamParser', () => {
   it('recognizes each supported report fed as one chunk', () => {
@@ -296,6 +336,112 @@ describe('SgrMouseStreamParser', () => {
     }
   })
 
+  it('decodes drag and hover motion with modifier flags', () => {
+    const cases: ReadonlyArray<readonly [string, NormalizedMouseEvent]> = [
+      [
+        `${ESC}[<36;1;2M`,
+        {
+          type: 'move',
+          button: 'left',
+          x: 0,
+          y: 1,
+          shift: true,
+          alt: false,
+          ctrl: false,
+        },
+      ],
+      [
+        `${ESC}[<40;3;4M`,
+        {
+          type: 'move',
+          button: 'left',
+          x: 2,
+          y: 3,
+          shift: false,
+          alt: true,
+          ctrl: false,
+        },
+      ],
+      [
+        `${ESC}[<48;5;6M`,
+        {
+          type: 'move',
+          button: 'left',
+          x: 4,
+          y: 5,
+          shift: false,
+          alt: false,
+          ctrl: true,
+        },
+      ],
+      [
+        `${ESC}[<60;7;8M`,
+        {
+          type: 'move',
+          button: 'left',
+          x: 6,
+          y: 7,
+          shift: true,
+          alt: true,
+          ctrl: true,
+        },
+      ],
+      [
+        `${ESC}[<39;1;2M`,
+        {
+          type: 'move',
+          button: 'none',
+          x: 0,
+          y: 1,
+          shift: true,
+          alt: false,
+          ctrl: false,
+        },
+      ],
+      [
+        `${ESC}[<43;3;4M`,
+        {
+          type: 'move',
+          button: 'none',
+          x: 2,
+          y: 3,
+          shift: false,
+          alt: true,
+          ctrl: false,
+        },
+      ],
+      [
+        `${ESC}[<51;5;6M`,
+        {
+          type: 'move',
+          button: 'none',
+          x: 4,
+          y: 5,
+          shift: false,
+          alt: false,
+          ctrl: true,
+        },
+      ],
+      [
+        `${ESC}[<63;7;8M`,
+        {
+          type: 'move',
+          button: 'none',
+          x: 6,
+          y: 7,
+          shift: true,
+          alt: true,
+          ctrl: true,
+        },
+      ],
+    ]
+    for (const [packet, event] of cases) {
+      expect(new SgrMouseStreamParser().push(ascii(packet)), packet).toEqual([
+        { type: 'mouse', event },
+      ])
+    }
+  })
+
   it('consumes unsupported complete reports silently at every split', () => {
     for (const packet of UNSUPPORTED) {
       const raw = ascii(packet)
@@ -318,12 +464,27 @@ describe('SgrMouseStreamParser', () => {
       ascii('a'),
       ascii(`${ESC}[<1;2;3M`),
       ascii('b'),
+      ascii(`${ESC}[<34;2;3M`),
+      ascii('c'),
+      ascii(`${ESC}[<35;2;3m`),
       ascii(PRESS),
+      ascii(MOVE_NONE),
     ])
     expect(parser.push(stream)).toEqual([
-      { type: 'keyboard', data: ascii('ab') },
+      { type: 'keyboard', data: ascii('abc') },
       { type: 'mouse', event: LEFT_PRESS },
+      { type: 'mouse', event: MOVE_NONE_EVENT },
     ])
+    expect(parser.hasPending()).toBe(false)
+  })
+
+  it('keeps order around unsupported motion in the same chunk', () => {
+    const parser = new SgrMouseStreamParser()
+    const output = parser.push(
+      ascii(`${MOVE_LEFT}${ESC}[<33;2;3M${ESC}[<32;2;3m${MOVE_NONE}`),
+    )
+    expect(mouseEvents(output)).toEqual([MOVE_LEFT_EVENT, MOVE_NONE_EVENT])
+    expect(keyboardBytes(output).length).toBe(0)
     expect(parser.hasPending()).toBe(false)
   })
 
@@ -332,7 +493,10 @@ describe('SgrMouseStreamParser', () => {
       `${ESC}[<0;0;5M`, // zero column
       `${ESC}[<0;5;0m`, // zero row
       `${ESC}[<0;0;0M`, // both zero
+      `${ESC}[<32;0;5M`, // motion with zero column
+      `${ESC}[<35;5;0M`, // hover motion with zero row
       `${ESC}[<1;2;3;4M`, // too many parameters
+      `${ESC}[<32;1;2;3M`, // motion with too many parameters
       `${ESC}[<123456;1;1M`, // six-digit button
       `${ESC}[<0;123456;1M`, // six-digit column
       `${ESC}[<0;1;123456M`, // six-digit row
@@ -535,11 +699,15 @@ describe('SgrMouseStreamParser', () => {
 
   it('keeps consecutive reports in order without merging', () => {
     const parser = new SgrMouseStreamParser()
-    const output = parser.push(ascii(PRESS + RELEASE + WHEEL_UP))
+    const output = parser.push(
+      ascii(PRESS + MOVE_LEFT + RELEASE + WHEEL_UP + MOVE_NONE),
+    )
     expect(mouseEvents(output)).toEqual([
       LEFT_PRESS,
+      MOVE_LEFT_EVENT,
       LEFT_RELEASE,
       WHEEL_UP_EVENT,
+      MOVE_NONE_EVENT,
     ])
     expect(keyboardBytes(output).length).toBe(0)
     expect(parser.hasPending()).toBe(false)

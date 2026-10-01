@@ -325,21 +325,136 @@ describe('translateMouseEvent', () => {
     ).toBe('\u001B[<80;2;2M')
   })
 
-  it('ignores motion without disturbing the tracked button state (drag nonregression)', () => {
+  it('reports held-left drag motion and keeps the release edge paired', () => {
     const state = createMouseTranslationState()
     expect(translateMouseEvent(mouseEvent({ x: 1, y: 1, buttons: 1 }), state)).toBe(
       '\u001B[<0;2;2M',
     )
-    // Motion with the button held must not emit and must not reset the state.
+    // Motion with the left button held is SGR motion in press form, not a
+    // second press, and must not disturb the edge tracker.
     expect(
       translateMouseEvent(
         mouseEvent({ x: 2, y: 1, buttons: 1, flags: WINDOWS_MOUSE_FLAGS.MOVED }),
         state,
       ),
-    ).toBeNull()
-    // The release edge is still detectable after a drag.
+    ).toBe('\u001B[<32;3;2M')
+    // The release edge is still detected and pairs with the press.
     expect(translateMouseEvent(mouseEvent({ x: 2, y: 1, buttons: 0 }), state)).toBe(
       '\u001B[<0;3;2m',
+    )
+  })
+
+  it('does not pair a release when only motion was seen (no press edge)', () => {
+    const state = createMouseTranslationState()
+    expect(
+      translateMouseEvent(
+        mouseEvent({ x: 1, y: 1, buttons: 1, flags: WINDOWS_MOUSE_FLAGS.MOVED }),
+        state,
+      ),
+    ).toBe('\u001B[<32;2;2M')
+    // No press edge was ever seen, so the idle record is not a release.
+    expect(translateMouseEvent(mouseEvent({ x: 1, y: 1, buttons: 0 }), state)).toBeNull()
+  })
+
+  it('reports hover motion with no button and never synthesizes a click', () => {
+    const state = createMouseTranslationState()
+    expect(
+      translateMouseEvent(
+        mouseEvent({
+          x: 4,
+          y: 2,
+          buttons: 0,
+          flags: WINDOWS_MOUSE_FLAGS.MOVED,
+          windowLeft: 2,
+          windowTop: 1,
+        }),
+        state,
+      ),
+    ).toBe('\u001B[<35;3;2M')
+    // A hover move is not a press edge, so a later idle record cannot turn
+    // into a release/click.
+    expect(
+      translateMouseEvent(
+        mouseEvent({ x: 4, y: 2, buttons: 0, windowLeft: 2, windowTop: 1 }),
+        state,
+      ),
+    ).toBeNull()
+  })
+
+  it('carries modifiers on drag and hover motion', () => {
+    const state = createMouseTranslationState()
+    expect(
+      translateMouseEvent(
+        mouseEvent({
+          x: 0,
+          y: 0,
+          buttons: 1,
+          flags: WINDOWS_MOUSE_FLAGS.MOVED,
+          control: WINDOWS_CONTROL_STATE.LEFT_CTRL_PRESSED,
+        }),
+        state,
+      ),
+    ).toBe('\u001B[<48;1;1M')
+    expect(
+      translateMouseEvent(
+        mouseEvent({
+          x: 0,
+          y: 0,
+          buttons: 0,
+          flags: WINDOWS_MOUSE_FLAGS.MOVED,
+          control:
+            WINDOWS_CONTROL_STATE.SHIFT_PRESSED |
+            WINDOWS_CONTROL_STATE.LEFT_ALT_PRESSED,
+        }),
+        state,
+      ),
+    ).toBe('\u001B[<47;1;1M')
+  })
+
+  it('ignores motion outside the viewport without breaking release pairing', () => {
+    const state = createMouseTranslationState()
+    expect(translateMouseEvent(mouseEvent({ x: 1, y: 1, buttons: 1 }), state)).toBe(
+      '\u001B[<0;2;2M',
+    )
+    // Drag motion outside the viewport origin is dropped by the shared bounds
+    // check and must leave the edge tracker intact.
+    expect(
+      translateMouseEvent(
+        mouseEvent({
+          x: 0,
+          y: 1,
+          buttons: 1,
+          flags: WINDOWS_MOUSE_FLAGS.MOVED,
+          windowLeft: 2,
+        }),
+        state,
+      ),
+    ).toBeNull()
+    expect(translateMouseEvent(mouseEvent({ x: 1, y: 1, buttons: 0 }), state)).toBe(
+      '\u001B[<0;2;2m',
+    )
+  })
+
+  it('ignores motion with only right/middle buttons held', () => {
+    const state = createMouseTranslationState()
+    expect(
+      translateMouseEvent(
+        mouseEvent({ x: 1, y: 1, buttons: 2, flags: WINDOWS_MOUSE_FLAGS.MOVED }),
+        state,
+      ),
+    ).toBeNull()
+    expect(
+      translateMouseEvent(
+        mouseEvent({ x: 1, y: 1, buttons: 6, flags: WINDOWS_MOUSE_FLAGS.MOVED }),
+        state,
+      ),
+    ).toBeNull()
+    // The ignored records leave the left edge tracker untouched.
+    expect(translateMouseEvent(mouseEvent({ x: 1, y: 1, buttons: 1 }), state)).toBe(
+      '\u001B[<0;2;2M',
+    )
+    expect(translateMouseEvent(mouseEvent({ x: 1, y: 1, buttons: 0 }), state)).toBe(
+      '\u001B[<0;2;2m',
     )
   })
 
@@ -432,6 +547,67 @@ describe('WindowsInputByteSource', () => {
     await delay()
 
     expect(chunks.join('')).toBe('x')
+
+    const stopping = source.stop()
+    fake.emitExit(0)
+    await stopping
+  })
+
+  it('translates mouse records end to end: hover, drag motion, release', async () => {
+    const fake = new FakeHelper()
+    const source = await startSource(fake)
+    const chunks: string[] = []
+    source.on('data', (chunk: Buffer | string) => {
+      chunks.push(
+        typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'),
+      )
+    })
+
+    fake.writeEvent({
+      type: 'mouse',
+      x: 3,
+      y: 2,
+      buttons: 0,
+      flags: WINDOWS_MOUSE_FLAGS.MOVED,
+      control: 0,
+      windowLeft: 1,
+      windowTop: 1,
+    })
+    fake.writeEvent({
+      type: 'mouse',
+      x: 4,
+      y: 2,
+      buttons: 1,
+      flags: 0,
+      control: 0,
+      windowLeft: 1,
+      windowTop: 1,
+    })
+    fake.writeEvent({
+      type: 'mouse',
+      x: 5,
+      y: 2,
+      buttons: 1,
+      flags: WINDOWS_MOUSE_FLAGS.MOVED,
+      control: WINDOWS_CONTROL_STATE.SHIFT_PRESSED,
+      windowLeft: 1,
+      windowTop: 1,
+    })
+    fake.writeEvent({
+      type: 'mouse',
+      x: 5,
+      y: 2,
+      buttons: 0,
+      flags: 0,
+      control: 0,
+      windowLeft: 1,
+      windowTop: 1,
+    })
+    await delay()
+
+    expect(chunks.join('')).toBe(
+      '\u001B[<35;3;2M\u001B[<0;4;2M\u001B[<36;5;2M\u001B[<0;5;2m',
+    )
 
     const stopping = source.stop()
     fake.emitExit(0)

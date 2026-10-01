@@ -3,7 +3,11 @@ import { render } from 'ink-testing-library'
 import { Text } from 'ink'
 import type { ReactElement } from 'react'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
-import { ToastProvider, useToast } from './ToastProvider.js'
+import {
+  ToastProvider,
+  useToast,
+  useToastVisibleRows,
+} from './ToastProvider.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
@@ -11,6 +15,45 @@ function renderInTheme(ui: ReactElement) {
 
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+function setTerminalRows(stdout: unknown, rows: number): void {
+  const target = stdout as { rows: number; emit: (event: string) => boolean }
+  target.rows = rows
+  target.emit('resize')
+}
+
+function frameLines(frame: string | undefined): string[] {
+  const normalized = (frame ?? '').replace(/\n+$/, '')
+  return normalized.length === 0 ? [] : normalized.split('\n')
+}
+
+function renderRowsHarness() {
+  let toastFn: ReturnType<typeof useToast>['toast'] | null = null
+  let observedRows = -1
+  let observedHookRows = -1
+
+  function Harness() {
+    const { toast, visibleRows } = useToast()
+    const hookRows = useToastVisibleRows()
+    toastFn = toast
+    observedRows = visibleRows
+    observedHookRows = hookRows
+    return <Text>{`visible:${visibleRows} hook:${hookRows}`}</Text>
+  }
+
+  const app = renderInTheme(
+    <ToastProvider>
+      <Harness />
+    </ToastProvider>,
+  )
+
+  return {
+    app,
+    getToast: () => toastFn!,
+    getRows: () => observedRows,
+    getHookRows: () => observedHookRows,
+  }
 }
 
 describe('ToastProvider', () => {
@@ -209,6 +252,112 @@ describe('ToastProvider', () => {
 
       await delay(150)
       expect(lastFrame()).not.toContain('Manual')
+    })
+  })
+
+  describe('visible row reservation', () => {
+    it('reports one visible row per toast at 24 terminal rows', async () => {
+      const harness = renderRowsHarness()
+      setTerminalRows(harness.app.stdout, 24)
+      await delay()
+
+      harness.getToast()('info', 'First toast')
+      await delay()
+      expect(harness.getRows()).toBe(1)
+      expect(harness.getHookRows()).toBe(1)
+      expect(harness.app.lastFrame()).toContain('visible:1 hook:1')
+      expect(frameLines(harness.app.lastFrame())).toHaveLength(2)
+
+      harness.getToast()('success', 'Second toast')
+      harness.getToast()('error', 'Third toast')
+      await delay()
+      expect(harness.getRows()).toBe(3)
+      expect(harness.getHookRows()).toBe(3)
+      expect(harness.app.lastFrame()).toContain('visible:3 hook:3')
+      expect(frameLines(harness.app.lastFrame())).toHaveLength(4)
+    })
+
+    it('never wraps a long toast into more than one row', async () => {
+      const harness = renderRowsHarness()
+      setTerminalRows(harness.app.stdout, 24)
+      await delay()
+
+      const longMessage = `long-${'x'.repeat(300)}-tail`
+      harness.getToast()('warning', longMessage)
+      await delay()
+
+      expect(harness.getRows()).toBe(1)
+      const lines = frameLines(harness.app.lastFrame())
+      expect(lines).toHaveLength(2)
+      expect(lines[0]).toContain('long-')
+      expect(lines[0]).toContain('…')
+      expect(lines[0]).not.toContain('-tail')
+    })
+
+    it('renders a multi-line message as a single physical row', async () => {
+      const harness = renderRowsHarness()
+      setTerminalRows(harness.app.stdout, 24)
+      await delay()
+
+      harness.getToast()('error', 'line one\nline two')
+      await delay()
+
+      expect(harness.getRows()).toBe(1)
+      expect(frameLines(harness.app.lastFrame())).toHaveLength(2)
+      expect(harness.app.lastFrame()).toContain('line one line two')
+    })
+
+    it('bounds the host by rows - 1 and hides toasts when no row is free', async () => {
+      const harness = renderRowsHarness()
+      setTerminalRows(harness.app.stdout, 2)
+      await delay()
+
+      harness.getToast()('info', 'Older toast')
+      harness.getToast()('info', 'Newer toast')
+      await delay()
+
+      expect(harness.getRows()).toBe(1)
+      expect(harness.app.lastFrame()).toContain('Newer toast')
+      expect(harness.app.lastFrame()).not.toContain('Older toast')
+      expect(frameLines(harness.app.lastFrame())).toHaveLength(2)
+
+      setTerminalRows(harness.app.stdout, 1)
+      await delay()
+
+      expect(harness.getRows()).toBe(0)
+      expect(harness.getHookRows()).toBe(0)
+      expect(harness.app.lastFrame()).not.toContain('Newer toast')
+      expect(frameLines(harness.app.lastFrame())).toHaveLength(1)
+    })
+
+    it('updates visibleRows when a toast is dismissed', async () => {
+      const harness = renderRowsHarness()
+      setTerminalRows(harness.app.stdout, 24)
+      await delay()
+
+      harness.getToast()('info', 'One')
+      harness.getToast()('info', 'Two')
+      const third = harness.getToast()('info', 'Three')
+      await delay()
+      expect(harness.getRows()).toBe(3)
+      expect(frameLines(harness.app.lastFrame())).toHaveLength(4)
+
+      third.dismiss()
+      await delay()
+      expect(harness.getRows()).toBe(2)
+      expect(harness.getHookRows()).toBe(2)
+      expect(harness.app.lastFrame()).toContain('visible:2 hook:2')
+      expect(frameLines(harness.app.lastFrame())).toHaveLength(3)
+    })
+
+    it('useToastVisibleRows returns 0 outside a ToastProvider', () => {
+      function OutsideProvider() {
+        const rows = useToastVisibleRows()
+        return <Text>{`outside:${rows}`}</Text>
+      }
+
+      const { lastFrame } = renderInTheme(<OutsideProvider />)
+      expect(lastFrame()).toContain('outside:0')
     })
   })
 })

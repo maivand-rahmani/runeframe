@@ -3,6 +3,7 @@ import { render } from 'ink-testing-library'
 import { Text } from 'ink'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { NavigationProvider, useNavigation } from '../../navigation/NavigationProvider.js'
@@ -68,6 +69,28 @@ async function clickCell(
 ) {
   await pressCell(stdin, cell)
   await releaseCell(stdin, cell)
+}
+
+async function hoverCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<35;${cell.x + 1};${cell.y + 1}M`)
+  await new Promise((resolve) => setTimeout(resolve, 40))
+}
+
+function isUnderlined(frame: string | undefined) {
+  return frame?.includes('\u001B[4m') ?? false
+}
+
+async function withColorOutput(run: () => Promise<void>) {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
 }
 
 async function pressCell(
@@ -306,7 +329,7 @@ describe('Breadcrumbs', () => {
     expect(lastFrame()).not.toContain('Lessons')
   })
 
-  it('automatically hit-tests prior breadcrumb segments', async () => {
+  it('automatically hit-tests prior breadcrumb segments', async () => withColorOutput(async () => {
     const selections: string[] = []
     function Harness() {
       const nav = useNavigation()
@@ -327,10 +350,19 @@ describe('Breadcrumbs', () => {
     await new Promise((resolve) => setTimeout(resolve, 120))
     expect(lastFrame()).toContain('Dashboard')
     expect(lastFrame()).toContain('Lessons')
-    await clickCell(stdin, cellInFrame(lastFrame(), 'Dashboard'))
+    const dashboard = cellInFrame(lastFrame(), 'Dashboard')
+    await hoverCell(stdin, dashboard)
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(selections).toEqual([])
+
+    await hoverCell(stdin, { x: dashboard.x, y: dashboard.y + 3 })
+    expect(isUnderlined(lastFrame())).toBe(false)
+    expect(selections).toEqual([])
+
+    await clickCell(stdin, dashboard)
 
     expect(selections).toEqual(['dashboard'])
-  })
+  }))
 
   it('uses the latest committed onSelect callback for mouse activation', async () => {
     const selections: string[] = []

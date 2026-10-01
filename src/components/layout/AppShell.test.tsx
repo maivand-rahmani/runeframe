@@ -10,6 +10,7 @@ import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { AppShell } from './AppShell.js'
 import { List } from '../selection/List.js'
 import { Button } from '../primitives/Button.js'
+import { useToast } from '../feedback/ToastProvider.js'
 
 function renderInShell(ui: ReactElement) {
   return render(
@@ -31,6 +32,29 @@ function renderInFrameworkShell(ui: ReactElement) {
     <FrameworkProvider registry={appShellRegistry} defaultScreen="shell-test">
       {ui}
     </FrameworkProvider>,
+  )
+}
+
+type ToastFn = ReturnType<typeof useToast>['toast']
+
+function ToastHarness({ capture }: { capture: { toast: ToastFn | null } }) {
+  const { toast } = useToast()
+  capture.toast = toast
+  return null
+}
+
+/**
+ * Real-app provider order: the anchored mouse root encloses the framework
+ * (including the toast host), so toast rows shift the shell down while the
+ * asserted origin stays correct.
+ */
+function renderInAnchoredFrameworkShell(ui: ReactElement) {
+  return render(
+    <MouseLayout origin={{ x: 0, y: 0 }} width={100} flexDirection="column">
+      <FrameworkProvider registry={appShellRegistry} defaultScreen="shell-test">
+        {ui}
+      </FrameworkProvider>
+    </MouseLayout>,
   )
 }
 
@@ -460,5 +484,202 @@ describe('AppShell', () => {
     expect(lastFrame()).toContain('Nested item 3')
     await wheelAtCell(stdin, innerCell, 'down')
     expect(lastFrame()).not.toContain('Shell anchor')
+  })
+
+  it('reserves toast rows so the constrained shell and toast host never exceed the terminal', async () => {
+    const activated: string[] = []
+    const contentRows = Array.from({ length: 28 }, (_, index) =>
+      index === 1 ? (
+        <Button key={index} focused onActivate={() => activated.push('go')}>
+          Go
+        </Button>
+      ) : (
+        <Text key={index}>Toast shell row {index}</Text>
+      ),
+    )
+    const capture: { toast: ToastFn | null } = { toast: null }
+    const { stdin, stdout, lastFrame } = renderInAnchoredFrameworkShell(
+      <>
+        <ToastHarness capture={capture} />
+        <AppShell
+          columns={100}
+          topBar={<Text>Top bar</Text>}
+          sidebar={<Text>Navigation</Text>}
+          statusBar={<Text>Status bar</Text>}
+          sidebarPosition="fixed"
+          scrollContent
+        >
+          <MouseLayout flexDirection="column">{contentRows}</MouseLayout>
+        </AppShell>
+      </>,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 140))
+    expect(frameRowCount(lastFrame())).toBeLessThanOrEqual(24)
+    expect(lastFrame()).toContain('Toast shell row 0')
+
+    const firstToast = capture.toast!('info', 'Toast one')
+    capture.toast!('warning', 'Toast two')
+    await new Promise((resolve) => setTimeout(resolve, 140))
+
+    expect(lastFrame()).toContain('Toast one')
+    expect(lastFrame()).toContain('Toast two')
+    expect(lastFrame()).toContain('Top bar')
+    expect(lastFrame()).toContain('Status bar')
+    // Two toast rows above a shell that reserved exactly rows - 2.
+    expect(frameRowCount(lastFrame())).toBe(24)
+
+    // A shorter terminal moves the reservation with the detected rows.
+    const resizableStdout = stdout as unknown as {
+      rows: number
+      emit: (event: string) => boolean
+    }
+    resizableStdout.rows = 18
+    resizableStdout.emit('resize')
+    await new Promise((resolve) => setTimeout(resolve, 140))
+    expect(frameRowCount(lastFrame())).toBeLessThanOrEqual(18)
+
+    const topCell = cellInFrame(lastFrame(), 'Toast shell row 0')
+    await wheelAtCell(stdin, topCell, 'down')
+    const scrolledFrame = lastFrame()
+    expect(scrolledFrame).not.toContain('Toast shell row 0')
+    expect(scrolledFrame).toContain('[Go]')
+    expect(frameRowCount(scrolledFrame)).toBeLessThanOrEqual(18)
+
+    await clickAtCell(stdin, cellInFrame(scrolledFrame, '[Go]'))
+    expect(activated).toEqual(['go'])
+
+    firstToast.dismiss()
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(lastFrame()).not.toContain('Toast one')
+    expect(frameRowCount(lastFrame())).toBeLessThanOrEqual(18)
+  })
+
+  it('clips the constrained shell safely when the terminal is shorter than its chrome', async () => {
+    const capture: { toast: ToastFn | null } = { toast: null }
+    const { stdout, lastFrame } = renderInAnchoredFrameworkShell(
+      <>
+        <ToastHarness capture={capture} />
+        <AppShell
+          columns={100}
+          topBar={<Text>Top bar</Text>}
+          statusBar={<Text>Status bar</Text>}
+          sidebarPosition="fixed"
+          scrollContent
+        >
+          <MouseLayout flexDirection="column">
+            {Array.from({ length: 28 }, (_, index) => (
+              <Text key={index}>Tiny shell row {index}</Text>
+            ))}
+          </MouseLayout>
+        </AppShell>
+      </>,
+    )
+    const resizableStdout = stdout as unknown as {
+      rows: number
+      emit: (event: string) => boolean
+    }
+    resizableStdout.rows = 2
+    resizableStdout.emit('resize')
+    await new Promise((resolve) => setTimeout(resolve, 140))
+
+    capture.toast!('info', 'Tiny toast')
+    await new Promise((resolve) => setTimeout(resolve, 140))
+    expect(lastFrame()).toContain('Tiny toast')
+    // One toast row above the one-row floor of the clipped shell.
+    expect(frameRowCount(lastFrame())).toBeLessThanOrEqual(2)
+
+    resizableStdout.rows = 1
+    resizableStdout.emit('resize')
+    await new Promise((resolve) => setTimeout(resolve, 140))
+    // The host yields its row entirely; the shell clips to its single row.
+    expect(lastFrame()).not.toContain('Tiny toast')
+    expect(frameRowCount(lastFrame())).toBeLessThanOrEqual(1)
+  })
+
+  it.each([
+    { label: 'narrow columns', columns: 70, withSidebar: true },
+    { label: 'missing sidebar', columns: 100, withSidebar: false },
+  ])(
+    'constrains the scrollContent shell when the sidebar is hidden ($label)',
+    async ({ columns, withSidebar }) => {
+      const activated: string[] = []
+      const contentRows = Array.from({ length: 28 }, (_, index) =>
+        index === 1 ? (
+          <Button key={index} focused onActivate={() => activated.push('go')}>
+            Go
+          </Button>
+        ) : (
+          <Text key={index}>Hidden shell row {index}</Text>
+        ),
+      )
+      const { stdin, stdout, lastFrame } = renderInAnchoredFrameworkShell(
+        <AppShell
+          columns={columns}
+          sidebar={withSidebar ? <Text>Navigation</Text> : undefined}
+          topBar={<Text>Top bar</Text>}
+          statusBar={<Text>Status bar</Text>}
+          sidebarPosition="fixed"
+          scrollContent
+        >
+          <MouseLayout flexDirection="column">{contentRows}</MouseLayout>
+        </AppShell>,
+      )
+      const resizableStdout = stdout as unknown as {
+        rows: number
+        emit: (event: string) => boolean
+      }
+      resizableStdout.rows = 18
+      resizableStdout.emit('resize')
+      await new Promise((resolve) => setTimeout(resolve, 140))
+
+      expect(lastFrame()).not.toContain('Navigation')
+      expect(lastFrame()).toContain('Top bar')
+      expect(lastFrame()).toContain('Status bar')
+      expect(frameRowCount(lastFrame())).toBeLessThanOrEqual(18)
+      // Hidden sidebar means no reserved column and no left margin.
+      expect(cellInFrame(lastFrame(), 'Hidden shell row 0').x).toBe(0)
+
+      const topCell = cellInFrame(lastFrame(), 'Hidden shell row 0')
+      await wheelAtCell(stdin, topCell, 'down')
+      const scrolledFrame = lastFrame()
+      expect(scrolledFrame).not.toContain('Hidden shell row 0')
+      expect(scrolledFrame).toContain('[Go]')
+      expect(frameRowCount(scrolledFrame)).toBeLessThanOrEqual(18)
+
+      await clickAtCell(stdin, cellInFrame(scrolledFrame, '[Go]'))
+      expect(activated).toEqual(['go'])
+      expect(frameRowCount(lastFrame())).toBeLessThanOrEqual(18)
+    },
+  )
+
+  it('keeps natural-height legacy layout when scrollContent is off with a hidden sidebar', async () => {
+    const { stdin, lastFrame } = renderInFrameworkShell(
+      <MouseLayout
+        origin={{ x: 0, y: 0 }}
+        width={100}
+        flexDirection="column"
+      >
+        <AppShell
+          columns={70}
+          sidebar={<Text>Navigation</Text>}
+          sidebarPosition="fixed"
+        >
+          <MouseLayout flexDirection="column">
+            {Array.from({ length: 28 }, (_, index) => (
+              <Text key={index}>Legacy row {index}</Text>
+            ))}
+          </MouseLayout>
+        </AppShell>
+      </MouseLayout>,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 120))
+
+    expect(lastFrame()).not.toContain('Navigation')
+    // Legacy mode keeps the natural height: nothing is clipped, and wheel
+    // scrolling stays gated because scrollContent is opt-in.
+    expect(lastFrame()).toContain('Legacy row 27')
+    const topCell = cellInFrame(lastFrame(), 'Legacy row 0')
+    await wheelAtCell(stdin, topCell, 'down')
+    expect(lastFrame()).toContain('Legacy row 0')
   })
 })

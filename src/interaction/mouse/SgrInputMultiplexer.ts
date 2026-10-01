@@ -20,10 +20,15 @@ export const MAX_SGR_INPUT_FLUSH_TIMEOUT_MS = 60
 
 /**
  * Cap on mouse events buffered while a delivery gate is closed (no subscriber
- * yet, or preceding keyboard bytes not consumed). When the cap is exceeded the
- * oldest event is dropped: the newest pointer state survives, memory stays
- * bounded, and a dropped press can only orphan a later release (which the
- * router consumes without activating).
+ * yet, or preceding keyboard bytes not consumed).
+ *
+ * Overflow is motion-aware. Contiguous same-button `move` events coalesce onto
+ * the newest sample while queued (never across a press/release/wheel), and an
+ * overflowing queue sheds its oldest queued `move` before any structural
+ * event. A 1003 motion flood therefore cannot evict a press/release and orphan
+ * its pair, while memory stays bounded and the newest pointer state survives.
+ * A queue made entirely of structural events falls back to dropping the oldest
+ * event.
  */
 export const MAX_PENDING_MOUSE_EVENTS = 64
 
@@ -238,7 +243,8 @@ class SgrInputMultiplexerImpl implements SgrInputMultiplexer {
   /**
    * Mouse events buffered until delivery gates open: the first subscriber has
    * arrived and every keyboard byte pushed before the event has been consumed
-   * by the Ink stream. Bounded by {@link MAX_PENDING_MOUSE_EVENTS}.
+   * by the Ink stream. Bounded by {@link MAX_PENDING_MOUSE_EVENTS}; contiguous
+   * same-button moves collapse onto the newest sample while queued.
    */
   private readonly pendingMouse: NormalizedMouseEvent[] = []
   private mouseGateOpen = true
@@ -388,12 +394,47 @@ class SgrInputMultiplexerImpl implements SgrInputMultiplexer {
    * routed against the screen state the keyboard input produced.
    */
   private deliverMouse(event: NormalizedMouseEvent): void {
+    this.enqueuePendingMouse(event)
+    this.flushPendingMouse()
+  }
+
+  /**
+   * Bounded admission into the pending queue. A contiguous same-button `move`
+   * replaces the queued move it follows: position relative to
+   * press/release/wheel is preserved, a motion flood costs one slot instead of
+   * one per sample, and the coordinates/modifiers delivered are the newest
+   * ones. On overflow the oldest queued move is shed first (see
+   * {@link MAX_PENDING_MOUSE_EVENTS}); only an all-structural queue falls back
+   * to dropping the oldest event.
+   */
+  private enqueuePendingMouse(event: NormalizedMouseEvent): void {
+    const lastIndex = this.pendingMouse.length - 1
+    const last = this.pendingMouse[lastIndex]
+    if (
+      event.type === 'move' &&
+      last !== undefined &&
+      last.type === 'move' &&
+      last.button === event.button
+    ) {
+      this.pendingMouse[lastIndex] = event
+      return
+    }
     this.pendingMouse.push(event)
     if (this.pendingMouse.length > MAX_PENDING_MOUSE_EVENTS) {
-      // Overflow policy: drop the oldest buffered event (see the constant).
-      this.pendingMouse.shift()
+      this.shedPendingMouse()
     }
-    this.flushPendingMouse()
+  }
+
+  /** Drop the oldest queued move, or the oldest event when none is queued. */
+  private shedPendingMouse(): void {
+    const moveIndex = this.pendingMouse.findIndex(
+      (queued) => queued.type === 'move',
+    )
+    if (moveIndex === -1) {
+      this.pendingMouse.shift()
+      return
+    }
+    this.pendingMouse.splice(moveIndex, 1)
   }
 
   private flushPendingMouse(): void {

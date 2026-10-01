@@ -6,15 +6,16 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from 'react'
-import { Box, Text, useWindowSize } from 'ink'
+import { Box, Text, useBoxMetrics, useWindowSize } from 'ink'
+import type { DOMElement } from 'ink'
 import {
   ActionRegistry,
   AppShell,
   Breadcrumbs,
   Button,
   ChoicePrompt,
-  CommandPalette,
   detectCollisions,
   EventTracer,
   FrameworkProvider,
@@ -28,7 +29,6 @@ import {
   MouseLayout,
   NumberInput,
   NodeProcessRunner,
-  Panel,
   ProcessOutputPanel,
   RadioList,
   ScreenOutlet,
@@ -48,6 +48,7 @@ import {
   useFocusable,
   useKeyBinding,
   useKeyHandler,
+  useKeyboardScope,
   useModal,
   useNavigation,
   useRegisterActions,
@@ -56,6 +57,8 @@ import {
   InputConsumptionResult,
   type Action,
   type FrameworkProviderProps,
+  type MouseDragEvent,
+  type MousePointerEvent,
   type Step,
 } from 'runeframe'
 import { KeyboardRegistry, ScreenTransition } from 'runeframe/experimental'
@@ -67,15 +70,26 @@ interface InteractionTabState {
   activeTab: string
   setActiveTab: (id: string) => void
   compactMouse: boolean
-  mouseShellScrollable: boolean
+  shellScrollable: boolean
+  brandHovered: boolean
+  pointerMessage: string
+  dragMessage: string
 }
+
+const INITIAL_POINTER_MESSAGE = 'Move over the app name above to test hover.'
 
 const InteractionTabContext = createContext<InteractionTabState>({
   activeTab: 'focus',
   setActiveTab: () => {},
   compactMouse: false,
-  mouseShellScrollable: false,
+  shellScrollable: false,
+  brandHovered: false,
+  pointerMessage: INITIAL_POINTER_MESSAGE,
+  dragMessage: '',
 })
+
+const SHOWCASE_BRAND = 'RUNEFRAME / FEATURE LAB'
+const SHOWCASE_COMPACT_BRAND = 'RUNEFRAME'
 
 interface CommandDispatch {
   navigate: (screenId: RouteId) => void
@@ -280,15 +294,17 @@ export function ShowcaseApp({
   }, [])
 
   return (
-    <FrameworkProvider
-      registry={screenRegistry}
-      defaultScreen="overview"
-      themeMode={themeMode}
-      mouseDiagnostics={mouseDiagnostics}
-      mouseEventSource={mouseEventSource}
-    >
-      <ShowcaseFrame themeMode={themeMode} onToggleTheme={toggleTheme} />
-    </FrameworkProvider>
+    <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+      <FrameworkProvider
+        registry={screenRegistry}
+        defaultScreen="overview"
+        themeMode={themeMode}
+        mouseDiagnostics={mouseDiagnostics}
+        mouseEventSource={mouseEventSource}
+      >
+        <ShowcaseFrame themeMode={themeMode} onToggleTheme={toggleTheme} />
+      </FrameworkProvider>
+    </MouseLayout>
   )
 }
 
@@ -303,27 +319,74 @@ function ShowcaseFrame({
   const columns = detectedColumns ?? process.stdout.columns ?? 80
   const rows = detectedRows ?? process.stdout.rows ?? 24
   const compactHeight = rows < 22
-  const { currentScreen, currentScreenId, canGoBack, push, pop, replace } =
-    useNavigation()
+  const {
+    currentScreen,
+    currentScreenId,
+    canGoBack,
+    breadcrumbs,
+    push,
+    pop,
+    popToRoot,
+    replace,
+  } = useNavigation()
   const { openModal } = useModal()
-  const { toast } = useToast()
+  const { toast, visibleRows } = useToast()
   const theme = useTheme()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [interactionTab, setInteractionTab] = useState('focus')
-  const isMouseContract =
-    currentScreenId === 'interactions' && interactionTab === 'mouse'
-  // Keep the full shell on ordinary terminals. The local fixed-sidebar shell
-  // sizes its scroll viewport around the actual top and status bars; only
-  // short terminals need the more compact Mouse contract presentation.
-  const compactMouse = isMouseContract && compactHeight
-  const mouseShellScrollable =
-    isMouseContract && !compactHeight && columns >= LAYOUT.narrow
-
+  const [brandHovered, setBrandHovered] = useState(false)
+  const [pointerMessage, setPointerMessage] = useState(INITIAL_POINTER_MESSAGE)
+  const [dragMessage, setDragMessage] = useState('')
+  const previousVisibleRows = useRef(visibleRows)
+  useEffect(() => {
+    if (previousVisibleRows.current === visibleRows) return
+    previousVisibleRows.current = visibleRows
+    // A toast shifts the measured app name, but no pointer motion may arrive
+    // to clear its previous hover target. Reset the demo cue with that shift.
+    setBrandHovered(false)
+    setPointerMessage(INITIAL_POINTER_MESSAGE)
+    setDragMessage('')
+  }, [visibleRows])
+  const compactLayout = compactHeight || columns < LAYOUT.narrow
+  const compactMouse =
+    currentScreenId === 'interactions' &&
+    interactionTab === 'mouse' &&
+    compactHeight
+  // Keep the content viewport scrollable at every terminal size. In compact
+  // layouts this keeps route navigation and actions reachable above the route
+  // content instead of letting a tall demo push them past the terminal edge.
+  const shellScrollable = true
   const back = useCallback(() => {
     if (canGoBack) pop()
     else toast('info', 'Already at the start of this route.')
   }, [canGoBack, pop, toast])
   const reset = useCallback(() => replace('overview'), [replace])
+  const goHome = useCallback(() => {
+    if (canGoBack) popToRoot()
+    else reset()
+  }, [canGoBack, popToRoot, reset])
+  const navigateTo = useCallback(
+    (screenId: RouteId) => {
+      if (screenId !== currentScreenId) push(screenId)
+    },
+    [currentScreenId, push],
+  )
+  const navigateToBreadcrumb = useCallback(
+    (screenId: string) => {
+      const currentIndex = breadcrumbs.length - 1
+      const targetIndex = breadcrumbs
+        .slice(0, currentIndex)
+        .map((entry) => entry.screenId)
+        .lastIndexOf(screenId)
+      if (targetIndex < 0) return
+      if (targetIndex === 0) {
+        popToRoot()
+        return
+      }
+      for (let index = targetIndex; index < currentIndex; index++) pop()
+    },
+    [breadcrumbs, pop, popToRoot],
+  )
   const showToast = useCallback(
     () => toast('success', 'Toast provider is live.'),
     [toast],
@@ -363,7 +426,6 @@ function ShowcaseFrame({
         main: ['overview', 'controls', 'workflow'],
         system: ['runtime', 'interactions'],
       }}
-      footer={<Text dimColor>0 reset · b back</Text>}
     />
   )
 
@@ -380,11 +442,81 @@ function ShowcaseFrame({
     </Box>
   )
 
-  // Keep automatic geometry inside the measured Interaction lab; the other
-  // feature screens retain their existing Panel-wrapped layout paths.
+  const topBar = columns >= SHOWCASE_COMPACT_BRAND.length ? (
+    <MouseDemoTopBar
+      screenTitle={currentScreen.title}
+      columns={columns}
+      hovered={brandHovered}
+      showActions={!compactLayout}
+      themeMode={themeMode}
+      onBack={back}
+      canGoBack={canGoBack}
+      onHome={goHome}
+      onHelp={showHelp}
+      onCommands={showPalette}
+      onToggleTheme={onToggleTheme}
+      onEnter={(event) => {
+        setBrandHovered(true)
+        setDragMessage('')
+        setPointerMessage(`Pointer entered at ${event.x}, ${event.y}.`)
+      }}
+      onLeave={(event) => {
+        setBrandHovered(false)
+        setDragMessage('')
+        setPointerMessage(
+          event.y < visibleRows
+            ? INITIAL_POINTER_MESSAGE
+            : `Pointer left at ${event.x}, ${event.y}.`,
+        )
+      }}
+      onMove={(event) => {
+        setBrandHovered(true)
+        setDragMessage('')
+        setPointerMessage(`Pointer over app name at ${event.x}, ${event.y}.`)
+      }}
+      onDragStart={(event) => {
+        setDragMessage(`Drag started at ${event.startX}, ${event.startY}.`)
+      }}
+      onDragMove={(event) => {
+        setDragMessage(
+          `Dragging ${event.startX}, ${event.startY} → ${event.x}, ${event.y}.`,
+        )
+      }}
+      onDragEnd={(event) => {
+        setDragMessage(
+          `Drag ended at ${event.x}, ${event.y} from ${event.startX}, ${event.startY}.`,
+        )
+      }}
+      onDragCancel={(event) => {
+        setDragMessage(
+          `Drag cancelled at ${event.x}, ${event.y} from ${event.startX}, ${event.startY}.`,
+        )
+      }}
+    />
+  ) : compactLayout ? (
+    <TopBar
+      appName="RUNEFRAME / FEATURE LAB"
+      screenTitle={currentScreen.title}
+      columns={columns}
+    />
+  ) : (
+    <ShowcaseTopBar
+      columns={columns}
+      screenTitle={currentScreen.title}
+      themeMode={themeMode}
+      onBack={back}
+      canGoBack={canGoBack}
+      onHome={goHome}
+      onHelp={showHelp}
+      onCommands={showPalette}
+      onToggleTheme={onToggleTheme}
+    />
+  )
+
+  // The outer anchored MouseLayout encloses FrameworkProvider as well as this
+  // shell, so routes and modal overlays share the same measured terminal space.
   return (
     <MouseLayout
-      origin={currentScreenId === 'interactions' ? { x: 0, y: 0 } : undefined}
       flexDirection="column"
       width={columns}
       backgroundColor={theme.colors.surface.base}
@@ -393,32 +525,54 @@ function ShowcaseFrame({
         columns={columns}
         sidebar={compactHeight ? undefined : sidebar}
         sidebarPosition="fixed"
-        scrollContent={mouseShellScrollable}
-        topBar={compactMouse ? undefined : (
-          <TopBar
-            appName="RUNEFRAME / FEATURE LAB"
-            screenTitle={currentScreen.title}
-            columns={columns}
-          />
-        )}
+        scrollContent={shellScrollable}
+        topBar={topBar}
         statusBar={rows < 12 || compactMouse ? undefined : status}
       >
         <MouseLayout flexDirection="column" paddingX={1}>
-          <Box marginBottom={1}>
+          {compactLayout && (
+            <MouseLayout marginBottom={1} flexDirection="column">
+              <CompactRouteNavigation
+                currentScreenId={currentScreenId}
+                onNavigate={navigateTo}
+              />
+              <ShellActionButtons
+                themeMode={themeMode}
+                onBack={back}
+                canGoBack={canGoBack}
+                onHome={goHome}
+                onHelp={showHelp}
+                onCommands={showPalette}
+                onToggleTheme={onToggleTheme}
+              />
+            </MouseLayout>
+          )}
+          <MouseLayout marginBottom={1} flexDirection="row" flexWrap="wrap" gap={1}>
             <Text color={theme.colors.text.muted}>PATH </Text>
-            <Breadcrumbs maxItems={3} />
-            {canGoBack && <Text color={theme.colors.text.muted}>  [b] back</Text>}
-          </Box>
+            <Breadcrumbs maxItems={3} onSelect={navigateToBreadcrumb} />
+            {!compactLayout && (
+              <Button
+                variant="ghost"
+                disabled={!canGoBack}
+                onActivate={back}
+              >
+                Back
+              </Button>
+            )}
+          </MouseLayout>
           <InteractionTabContext.Provider
             value={{
               activeTab: interactionTab,
               setActiveTab: setInteractionTab,
               compactMouse,
-              mouseShellScrollable,
+              shellScrollable,
+              brandHovered,
+              pointerMessage,
+              dragMessage,
             }}
           >
             {paletteOpen ? (
-              <CommandPalette
+              <ShowcaseCommandPalette
                 registry={commandRegistry}
                 onClose={() => setPaletteOpen(false)}
               />
@@ -429,9 +583,22 @@ function ShowcaseFrame({
             )}
           </InteractionTabContext.Provider>
           {!compactHeight && !compactMouse && (
-            <Text dimColor>
-              [ctrl+p] commands  [t] theme  [?] help  [0] replace route
-            </Text>
+            <MouseLayout flexDirection="column">
+              <Text dimColor>
+                [ctrl+p] commands  [t] theme  [?] help  [0] replace route
+              </Text>
+              <Text
+                color={
+                  brandHovered
+                    ? theme.colors.status.info
+                    : theme.colors.text.muted
+                }
+              >
+                {brandHovered
+                  ? dragMessage || pointerMessage
+                  : 'Mouse: click controls · hover the app name · keyboard still works'}
+              </Text>
+            </MouseLayout>
           )}
         </MouseLayout>
       </AppShell>
@@ -444,18 +611,369 @@ function LiveActionCount() {
   return <Text dimColor>{actions.length} actions</Text>
 }
 
+function MouseDemoTopBar({
+  screenTitle,
+  columns,
+  hovered,
+  showActions,
+  themeMode,
+  onBack,
+  canGoBack,
+  onHome,
+  onHelp,
+  onCommands,
+  onToggleTheme,
+  onEnter,
+  onLeave,
+  onMove,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+  onDragCancel,
+}: {
+  screenTitle: string
+  columns: number
+  hovered: boolean
+  showActions: boolean
+  themeMode: ThemeMode
+  onBack: () => void
+  canGoBack: boolean
+  onHome: () => void
+  onHelp: () => void
+  onCommands: () => void
+  onToggleTheme: () => void
+  onEnter: (event: MousePointerEvent) => void
+  onLeave: (event: MousePointerEvent) => void
+  onMove: (event: MousePointerEvent) => void
+  onDragStart: (event: MouseDragEvent) => void
+  onDragMove: (event: MouseDragEvent) => void
+  onDragEnd: (event: MouseDragEvent) => void
+  onDragCancel: (event: MouseDragEvent) => void
+}) {
+  const theme = useTheme()
+  const { visibleRows } = useToast()
+  const brandText =
+    columns < SHOWCASE_BRAND.length ? SHOWCASE_COMPACT_BRAND : SHOWCASE_BRAND
+  const brandRef = useRef<DOMElement | null>(null)
+  const metrics = useBoxMetrics(brandRef)
+  // The measured top is relative to the shell. ToastProvider renders rows
+  // above that shell, so translate the target into the physical terminal space.
+  const bounds = {
+    x: Math.round(metrics.left),
+    y: Math.round(metrics.top) + visibleRows,
+    width: metrics.hasMeasured ? Math.round(metrics.width) : 0,
+    height: metrics.hasMeasured ? Math.round(metrics.height) : 0,
+  }
+
+  return (
+    <MouseLayout
+      flexDirection="row"
+      justifyContent="space-between"
+      width="100%"
+    >
+      <MouseLayout flexDirection="row" flexShrink={0} gap={1}>
+        <MouseLayout ref={brandRef} flexShrink={0}>
+          <MouseArea
+            bounds={bounds}
+            scope="navigation"
+            onEnter={onEnter}
+            onLeave={onLeave}
+            onMove={onMove}
+            onDragStart={onDragStart}
+            onDragMove={onDragMove}
+            onDragEnd={onDragEnd}
+            onDragCancel={onDragCancel}
+          >
+            <Text
+              bold
+              color={hovered ? theme.colors.text.inverse : theme.colors.text.primary}
+              backgroundColor={hovered ? theme.colors.status.info : undefined}
+              underline={hovered}
+            >
+              {brandText}
+            </Text>
+          </MouseArea>
+        </MouseLayout>
+        {columns >= SHOWCASE_BRAND.length + 8 && (
+          <Text
+            color={hovered ? theme.colors.status.info : theme.colors.text.muted}
+          >
+            {hovered ? '● hover' : '○ hover'}
+          </Text>
+        )}
+      </MouseLayout>
+      {columns >= 100 && (
+        <MouseLayout>
+          <Text color={theme.colors.text.secondary}>{screenTitle}</Text>
+        </MouseLayout>
+      )}
+      {showActions && (
+        <ShellActionButtons
+          themeMode={themeMode}
+          onBack={onBack}
+          canGoBack={canGoBack}
+          onHome={onHome}
+          onHelp={onHelp}
+          onCommands={onCommands}
+          onToggleTheme={onToggleTheme}
+          includeBack={false}
+        />
+      )}
+    </MouseLayout>
+  )
+}
+
+function ShowcaseTopBar({
+  columns,
+  screenTitle,
+  themeMode,
+  onBack,
+  canGoBack,
+  onHome,
+  onHelp,
+  onCommands,
+  onToggleTheme,
+}: {
+  columns: number
+  screenTitle: string
+  themeMode: ThemeMode
+  onBack: () => void
+  canGoBack: boolean
+  onHome: () => void
+  onHelp: () => void
+  onCommands: () => void
+  onToggleTheme: () => void
+}) {
+  const theme = useTheme()
+  return (
+    <MouseLayout
+      flexDirection="row"
+      justifyContent="space-between"
+      width="100%"
+    >
+      <MouseLayout flexShrink={0}>
+        <Text bold color={theme.colors.text.primary}>{SHOWCASE_BRAND}</Text>
+      </MouseLayout>
+      {columns >= 100 && (
+        <MouseLayout>
+          <Text color={theme.colors.text.secondary}>{screenTitle}</Text>
+        </MouseLayout>
+      )}
+      <ShellActionButtons
+        themeMode={themeMode}
+        onBack={onBack}
+        canGoBack={canGoBack}
+        onHome={onHome}
+        onHelp={onHelp}
+        onCommands={onCommands}
+        onToggleTheme={onToggleTheme}
+        includeBack={false}
+      />
+    </MouseLayout>
+  )
+}
+
+function ShowcaseCommandPalette({
+  registry,
+  onClose,
+}: {
+  registry: ActionRegistry
+  onClose: () => void
+}) {
+  const theme = useTheme()
+  const [query, setQuery] = useState('')
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const results = registry.search(query)
+  const stateRef = useRef({ results, selectedIndex, setSelectedIndex, onClose })
+  stateRef.current = { results, selectedIndex, setSelectedIndex, onClose }
+  const { pushScope, popScope } = useKeyboardScope()
+
+  useEffect(() => setSelectedIndex(0), [query])
+  useEffect(() => {
+    pushScope('command')
+    return () => popScope('command')
+  }, [pushScope, popScope])
+
+  useKeyHandler(
+    (event) => {
+      const state = stateRef.current
+      if (event.escape) {
+        state.onClose()
+        return InputConsumptionResult.Consumed
+      }
+      if (event.up) {
+        state.setSelectedIndex((index) => Math.max(0, index - 1))
+        return InputConsumptionResult.Consumed
+      }
+      if (event.down) {
+        state.setSelectedIndex((index) =>
+          state.results.length === 0
+            ? 0
+            : Math.min(index + 1, state.results.length - 1),
+        )
+        return InputConsumptionResult.Consumed
+      }
+      if (event.enter) {
+        state.results[state.selectedIndex]?.action.handler()
+        state.onClose()
+        return InputConsumptionResult.Consumed
+      }
+      return InputConsumptionResult.NotConsumed
+    },
+    'command',
+    { priority: 80 },
+  )
+
+  const priorCategory = { value: '' }
+  return (
+    <MouseLayout
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={theme.colors.border.default}
+      paddingX={1}
+    >
+      <MouseLayout
+        flexDirection="row"
+        justifyContent="space-between"
+        marginBottom={1}
+      >
+        <MouseLayout flexDirection="row">
+          <Text bold color={theme.colors.focus.active}>{'>'} </Text>
+          <SearchInput
+            value={query}
+            onChange={setQuery}
+            placeholder="Type a command or search term"
+            scope="command"
+          />
+        </MouseLayout>
+        <Button variant="ghost" onActivate={onClose}>Close</Button>
+      </MouseLayout>
+      <Text dimColor>Click a command to run it · ↑/↓ then Enter also works</Text>
+      <MouseLayout flexDirection="column" marginTop={1}>
+        {results.length === 0 && (
+          <Text dimColor>No matching commands found</Text>
+        )}
+        {results.map((match, index) => {
+          const showCategory = match.action.category !== priorCategory.value
+          priorCategory.value = match.action.category
+          return (
+            <MouseLayout key={`${match.action.id}:${index}`} flexDirection="column">
+              {showCategory && (
+                <Text bold dimColor>{match.action.category.toUpperCase()}</Text>
+              )}
+              <Button
+                variant={index === selectedIndex ? 'primary' : 'ghost'}
+                onActivate={() => {
+                  match.action.handler()
+                  onClose()
+                }}
+              >
+                {match.action.label}
+              </Button>
+            </MouseLayout>
+          )
+        })}
+      </MouseLayout>
+    </MouseLayout>
+  )
+}
+
+function CompactRouteNavigation({
+  currentScreenId,
+  onNavigate,
+}: {
+  currentScreenId: string
+  onNavigate: (screenId: RouteId) => void
+}) {
+  return (
+    <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
+      {sidebarItems.map((item) => (
+        <Button
+          key={item.id}
+          variant={currentScreenId === item.id ? 'primary' : 'ghost'}
+          onActivate={() => onNavigate(item.id as RouteId)}
+        >
+          {item.label}
+        </Button>
+      ))}
+    </MouseLayout>
+  )
+}
+
+function ShellActionButtons({
+  themeMode,
+  onBack,
+  canGoBack,
+  onHome,
+  onHelp,
+  onCommands,
+  onToggleTheme,
+  includeBack = true,
+}: {
+  themeMode: ThemeMode
+  onBack: () => void
+  canGoBack: boolean
+  onHome: () => void
+  onHelp: () => void
+  onCommands: () => void
+  onToggleTheme: () => void
+  includeBack?: boolean
+}) {
+  return (
+    <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
+      {includeBack && (
+        <Button variant="ghost" disabled={!canGoBack} onActivate={onBack}>
+          Back
+        </Button>
+      )}
+      <Button variant="ghost" onActivate={onHome}>Home</Button>
+      <Button variant="ghost" onActivate={onHelp}>Help</Button>
+      <Button variant="ghost" onActivate={onCommands}>Commands</Button>
+      <Button variant="ghost" onActivate={onToggleTheme}>
+        Theme: {themeMode === 'dark' ? 'Light' : 'Dark'}
+      </Button>
+    </MouseLayout>
+  )
+}
+
+/** Panel styling with measured ancestry for its interactive contents. */
+function MeasuredPanel({
+  title,
+  children,
+}: {
+  title?: string
+  children: ReactNode
+}) {
+  const theme = useTheme()
+  return (
+    <MouseLayout
+      borderStyle={theme.borderStyles.panel as 'round'}
+      borderColor={theme.colors.border.default}
+      flexDirection="column"
+      paddingX={theme.spacing.sm}
+    >
+      {title != null && (
+        <MouseLayout marginBottom={theme.spacing.xs}>
+          <Text bold>{title}</Text>
+        </MouseLayout>
+      )}
+      {children}
+    </MouseLayout>
+  )
+}
+
 function OverviewScreen() {
   const theme = useTheme()
   const { push } = useNavigation()
 
   return (
-    <Box flexDirection="column">
-      <Box marginBottom={1}>
+    <MouseLayout flexDirection="column">
+      <MouseLayout marginBottom={1}>
         <Text bold color={theme.colors.focus.active}>
           MAINTAINER BENCH
         </Text>
         <Text color={theme.colors.text.muted}>  /  v0.5.1</Text>
-      </Box>
+      </MouseLayout>
       <Text bold color={theme.colors.text.primary}>
         Public surface, in motion.
       </Text>
@@ -463,33 +981,39 @@ function OverviewScreen() {
         A compact test bench for routes, controls, keyboard scope, and real process output.
       </Text>
 
-      <Box marginTop={1}>
-        <Panel title="START / choose a track">
-          <Box flexDirection="column">
-            <Text color={theme.colors.text.secondary}>01  Controls      Inputs, lists, focus-aware picks</Text>
-            <Text color={theme.colors.text.secondary}>02  Workflow      ChoicePrompt into StepFlow</Text>
-            <Text color={theme.colors.text.secondary}>03  Process       Node child process, stdout + stderr</Text>
-            <Text color={theme.colors.text.secondary}>04  Input lab     Focus tree, trace, mouse contract</Text>
-          </Box>
-          <Box marginTop={1}>
+      <MouseLayout marginTop={1}>
+        <MeasuredPanel title="START / choose a track">
+          <MouseLayout flexDirection="column">
+            <Button variant="ghost" onActivate={() => push('controls')}>
+              01  Controls · Inputs, lists, focus-aware picks
+            </Button>
+            <Button variant="ghost" onActivate={() => push('workflow')}>
+              02  Workflow · ChoicePrompt into StepFlow
+            </Button>
+            <Button variant="ghost" onActivate={() => push('runtime')}>
+              03  Process · Node child output
+            </Button>
+            <Button variant="ghost" onActivate={() => push('interactions')}>
+              04  Input lab · Focus, keys, and mouse
+            </Button>
+          </MouseLayout>
+          <MouseLayout marginTop={1} flexDirection="row" gap={1}>
             <Button
               variant="primary"
-              focused
               onActivate={() => push('controls')}
             >
               Open control bench
             </Button>
-            <Text dimColor>  Enter</Text>
-          </Box>
-        </Panel>
-      </Box>
+          </MouseLayout>
+        </MeasuredPanel>
+      </MouseLayout>
 
-      <Box marginTop={1}>
+      <MouseLayout marginTop={1}>
         <Text color={theme.colors.text.muted}>
           [1–4] push a route  ·  [b] pop  ·  [0] replace with overview
         </Text>
-      </Box>
-    </Box>
+      </MouseLayout>
+    </MouseLayout>
   )
 }
 
@@ -516,9 +1040,20 @@ function ControlsScreen() {
   const [textValue, setTextValue] = useState('')
   const [numberValue, setNumberValue] = useState(0)
   const [query, setQuery] = useState('')
-  const [selectedRow, setSelectedRow] = useState('focus')
+  const [selectedRow, setSelectedRow] = useState('process')
   const [radioValue, setRadioValue] = useState('compact')
   const [listValue, setListValue] = useState('alpha')
+  const submitText = useCallback(() => {
+    if (!textValue.trim()) {
+      toast('warning', 'Enter a value first.')
+      return
+    }
+    toast('success', `Submitted: ${textValue}`)
+  }, [textValue, toast])
+  const activateSelected = useCallback(
+    () => toast('success', `Opened ${selectedRow}.`),
+    [selectedRow, toast],
+  )
 
   const backFromControls = useCallback(() => {
     if (canGoBack) pop()
@@ -533,39 +1068,44 @@ function ControlsScreen() {
   })
 
   return (
-    <Box flexDirection="column">
-      <Box marginBottom={1}>
+    <MouseLayout flexDirection="column">
+      <MouseLayout marginBottom={1}>
         <Text bold color={theme.colors.focus.active}>CONTROL DESK</Text>
         <Text color={theme.colors.text.muted}>  /  one keyboard scope at a time</Text>
-      </Box>
+      </MouseLayout>
       <Tabs
         tabs={controlTabs}
         activeTabId={activeTab}
         onChange={setActiveTab}
         scope="textinput"
       />
-      <Box marginTop={1}>
+      <MouseLayout marginTop={1}>
         {activeTab === 'text' && (
-          <Panel title="TextInput / textinput scope">
+          <MeasuredPanel title="TextInput / textinput scope">
             <Text color={theme.colors.text.secondary}>Type to append · Backspace deletes · Enter submits.</Text>
-            <Box marginTop={1}>
+            <MouseLayout marginTop={1}>
               <TextInput
                 value={textValue}
                 onChange={setTextValue}
                 placeholder="A short maintainer note"
                 maxLength={28}
                 validate={(value) => value.trim() ? null : 'Enter a value first.'}
-                onSubmit={(value) => toast('success', `Submitted: ${value}`)}
+                onSubmit={submitText}
                 onCancel={() => setTextValue('')}
               />
-            </Box>
+            </MouseLayout>
+            <MouseLayout marginTop={1}>
+              <Button variant="primary" onActivate={submitText}>
+                Submit note
+              </Button>
+            </MouseLayout>
             <Text color={theme.colors.text.muted}>Draft: {textValue || '—'}</Text>
-          </Panel>
+          </MeasuredPanel>
         )}
         {activeTab === 'number' && (
-          <Panel title="NumberInput / bounded value">
+          <MeasuredPanel title="NumberInput / bounded value">
             <Text color={theme.colors.text.secondary}>Type digits or use ↑/↓ by 5 · Enter commits · Esc resets.</Text>
-            <Box marginTop={1}>
+            <MouseLayout marginTop={1}>
               <NumberInput
                 value={numberValue}
                 onChange={setNumberValue}
@@ -575,36 +1115,49 @@ function ControlsScreen() {
                 step={5}
                 label="Limit"
               />
-            </Box>
+            </MouseLayout>
+            <MouseLayout marginTop={1}>
+              <Button
+                variant="primary"
+                onActivate={() => toast('info', `Limit set to ${numberValue}.`)}
+              >
+                Commit limit
+              </Button>
+            </MouseLayout>
             <Text color={theme.colors.text.muted}>Current value: {numberValue} / 60</Text>
-          </Panel>
+          </MeasuredPanel>
         )}
         {activeTab === 'search' && (
-          <Panel title="SearchInput + SelectableList">
-            <Text color={theme.colors.text.secondary}>Filter by label or id; arrows move focus; Enter opens the row.</Text>
-            <Box marginTop={1}>
+          <MeasuredPanel title="SearchInput + SelectableList">
+            <Text color={theme.colors.text.secondary}>Filter by label or id; click a row, then open the selection.</Text>
+            <MouseLayout marginTop={1}>
               <SearchInput
                 value={query}
                 onChange={setQuery}
                 placeholder="Filter public features"
               />
-            </Box>
-            <Box marginTop={1}>
+            </MouseLayout>
+            <MouseLayout marginTop={1}>
+              <Button variant="primary" onActivate={activateSelected}>
+                Open selected
+              </Button>
+            </MouseLayout>
+            <MouseLayout marginTop={1}>
               <SelectableList
                 items={searchableRows}
                 filterQuery={query}
                 selectedId={selectedRow}
                 onSelect={setSelectedRow}
-                onActivate={(id) => toast('success', `Opened ${id}.`)}
+                onActivate={activateSelected}
                 maxVisible={3}
               />
-            </Box>
-          </Panel>
+            </MouseLayout>
+          </MeasuredPanel>
         )}
         {activeTab === 'radio' && (
-          <Panel title="RadioList / single choice">
+          <MeasuredPanel title="RadioList / single choice">
             <Text color={theme.colors.text.secondary}>↑/↓ moves · Enter selects. The current choice stays controlled by React.</Text>
-            <Box marginTop={1}>
+            <MouseLayout marginTop={1}>
               <RadioList
                 options={[
                   { value: 'compact', label: 'Compact output' },
@@ -617,14 +1170,14 @@ function ControlsScreen() {
                   toast('info', `Output mode: ${value}.`)
                 }}
               />
-            </Box>
+            </MouseLayout>
             <Text color={theme.colors.text.muted}>Selected: {radioValue}</Text>
-          </Panel>
+          </MeasuredPanel>
         )}
         {activeTab === 'list' && (
-          <Panel title="List / roving focus">
-            <Text color={theme.colors.text.secondary}>↑/↓ changes focus · Enter activates · selection follows focus.</Text>
-            <Box marginTop={1}>
+          <MeasuredPanel title="List / roving focus">
+            <Text color={theme.colors.text.secondary}>Click a row to focus it, then activate the selection.</Text>
+            <MouseLayout marginTop={1}>
               <List
                 items={searchableRows}
                 selectedId={selectedRow}
@@ -632,14 +1185,22 @@ function ControlsScreen() {
                 onActivate={(id) => toast('success', `Activated ${id}.`)}
                 maxVisible={3}
               />
-            </Box>
+            </MouseLayout>
+            <MouseLayout marginTop={1}>
+              <Button
+                variant="primary"
+                onActivate={() => toast('success', `Activated ${selectedRow}.`)}
+              >
+                Activate selected
+              </Button>
+            </MouseLayout>
             <Text color={theme.colors.text.muted}>Focused row: {selectedRow}</Text>
-          </Panel>
+          </MeasuredPanel>
         )}
         {activeTab === 'select' && (
-          <Panel title="ListSelect / return a typed value">
-            <Text color={theme.colors.text.secondary}>Move with ↑/↓, then Enter. Selection is passed to the caller.</Text>
-            <Box marginTop={1}>
+          <MeasuredPanel title="ListSelect / return a typed value">
+            <Text color={theme.colors.text.secondary}>Click an option or move with ↑/↓ and press Enter.</Text>
+            <MouseLayout marginTop={1}>
               <ListSelect
                 items={[
                   { value: 'alpha', label: 'Alpha / stable' },
@@ -651,19 +1212,19 @@ function ControlsScreen() {
                   toast('success', `Selected channel: ${value}.`)
                 }}
               />
-            </Box>
+            </MouseLayout>
             <Text color={theme.colors.text.muted}>Last selection: {listValue}</Text>
-          </Panel>
+          </MeasuredPanel>
         )}
-      </Box>
-      <Box marginTop={1}>
+      </MouseLayout>
+      <MouseLayout marginTop={1}>
         <Text color={theme.colors.text.muted}>
           {activeTab === 'text' || activeTab === 'search'
             ? '←/→ changes the demo · printable keys stay in the field.'
             : '←/→ changes the demo · [b] back · vertical arrows stay in the widget.'}
         </Text>
-      </Box>
-    </Box>
+      </MouseLayout>
+    </MouseLayout>
   )
 }
 
@@ -672,31 +1233,31 @@ const workflowSteps: Step[] = [
     id: 'inspect',
     title: 'Inspect',
     component: ({ data }) => (
-      <Box flexDirection="column">
+      <MouseLayout flexDirection="column">
         <Text>Current track: {String(data.track ?? 'not set')}</Text>
         <Text dimColor>Review the selected option before moving on.</Text>
-      </Box>
+      </MouseLayout>
     ),
   },
   {
     id: 'configure',
     title: 'Configure',
     component: ({ data }) => (
-      <Box flexDirection="column">
+      <MouseLayout flexDirection="column">
         <Text>Plan: {String(data.plan ?? 'safe default')}</Text>
         <Text dimColor>The step context carries values across screens.</Text>
         <Text dimColor>Press Enter to continue with the safe default.</Text>
-      </Box>
+      </MouseLayout>
     ),
   },
   {
     id: 'review',
     title: 'Review',
     component: ({ data }) => (
-      <Box flexDirection="column">
+      <MouseLayout flexDirection="column">
         <Text>Ready to finish this small flow.</Text>
         <Text dimColor>Track: {String(data.track ?? '—')} · Plan: {String(data.plan ?? 'safe default')}</Text>
-      </Box>
+      </MouseLayout>
     ),
   },
 ]
@@ -706,15 +1267,22 @@ function WorkflowScreen() {
   const { toast } = useToast()
   const [phase, setPhase] = useState<'choice' | 'steps'>('choice')
   const [track, setTrack] = useState('')
+  const cancelChoice = useCallback(
+    () => toast('warning', 'No workflow started.'),
+    [toast],
+  )
 
   return (
-    <Box flexDirection="column">
-      <Box marginBottom={1}>
+    <MouseLayout flexDirection="column">
+      <MouseLayout marginBottom={1}>
         <Text bold color={theme.colors.focus.active}>WORKFLOW / 02</Text>
         <Text color={theme.colors.text.muted}>  /  a prompt hands off to a guided flow</Text>
-      </Box>
+      </MouseLayout>
       {phase === 'choice' ? (
-        <Panel title="ChoicePrompt / quick decision">
+        <MeasuredPanel title="ChoicePrompt / quick decision">
+          <MouseLayout marginTop={1}>
+            <Button variant="ghost" onActivate={cancelChoice}>Cancel workflow</Button>
+          </MouseLayout>
           <ChoicePrompt
             label="Choose a neutral test track"
             items={[
@@ -727,16 +1295,16 @@ function WorkflowScreen() {
               setPhase('steps')
               toast('info', `Workflow started: ${item.value}.`)
             }}
-            onCancel={() => toast('warning', 'No workflow started.')}
+            onCancel={cancelChoice}
           />
-          <Box marginTop={1}>
+          <MouseLayout marginTop={1} flexDirection="column">
             <Text dimColor>[a–c] choose · ↑/↓ move · Esc cancel</Text>
-          </Box>
-        </Panel>
+          </MouseLayout>
+        </MeasuredPanel>
       ) : (
-        <Panel title="StepFlow / shared step context">
+        <MeasuredPanel title="StepFlow / shared step context">
           <Text color={theme.colors.text.secondary}>ChoicePrompt result: {track}</Text>
-          <Box marginTop={1}>
+          <MouseLayout marginTop={1}>
             <StepFlow
               key={track}
               steps={workflowSteps}
@@ -747,10 +1315,10 @@ function WorkflowScreen() {
               }}
               onCancel={() => setPhase('choice')}
             />
-          </Box>
-        </Panel>
+          </MouseLayout>
+        </MeasuredPanel>
       )}
-    </Box>
+    </MouseLayout>
   )
 }
 
@@ -805,16 +1373,16 @@ function RuntimeScreen() {
         : 'neutral'
 
   return (
-    <Box flexDirection="column">
-      <Box marginBottom={1}>
+    <MouseLayout flexDirection="column">
+      <MouseLayout marginBottom={1}>
         <Text bold color={theme.colors.focus.active}>PROCESS / 03</Text>
         <Text color={theme.colors.text.muted}>  /  actual Node child process</Text>
-      </Box>
-      <Panel title="useAsyncSession + NodeProcessRunner">
+      </MouseLayout>
+      <MeasuredPanel title="useAsyncSession + NodeProcessRunner">
         <Text color={theme.colors.text.secondary}>
           Direct argv · shell disabled · stdout and stderr stay separate.
         </Text>
-        <Box marginTop={1} flexDirection="row" gap={2}>
+        <MouseLayout marginTop={1} flexDirection="row" gap={2}>
           <Button
             variant="primary"
             focused={!session.isRunning}
@@ -832,8 +1400,8 @@ function RuntimeScreen() {
             Stop
           </Button>
           <Text dimColor>[r] run  [c] stop</Text>
-        </Box>
-        <Box marginTop={1}>
+        </MouseLayout>
+        <MouseLayout marginTop={1}>
           <Text color={theme.colors.text.muted}>Session </Text>
           <Text color={theme.colors.status[statusVariant === 'neutral' ? 'info' : statusVariant]}>
             {session.status.toUpperCase()}
@@ -841,20 +1409,17 @@ function RuntimeScreen() {
           {session.exitCode !== null && (
             <Text color={theme.colors.text.secondary}>  exit {session.exitCode}</Text>
           )}
-        </Box>
-        <Box marginTop={1}>
+        </MouseLayout>
+        <MouseLayout>
           <ProcessOutputPanel
             events={session.events}
             status={session.status}
             activeCommand={`${process.execPath} -e <probe>`}
             maxVisibleLines={5}
           />
-        </Box>
-      </Panel>
-      <Box marginTop={1}>
-        <Text color={theme.colors.text.muted}>The command runs from the current Node executable; no shell string is assembled.</Text>
-      </Box>
-    </Box>
+        </MouseLayout>
+      </MeasuredPanel>
+    </MouseLayout>
   )
 }
 
@@ -871,7 +1436,10 @@ function InteractionScreen() {
     activeTab,
     setActiveTab,
     compactMouse,
-    mouseShellScrollable,
+    shellScrollable,
+    brandHovered,
+    pointerMessage,
+    dragMessage,
   } = useContext(InteractionTabContext)
   const [traceRevision, setTraceRevision] = useState(0)
   const [tracer] = useState(() => new EventTracer(4))
@@ -896,14 +1464,14 @@ function InteractionScreen() {
 
   return (
     <MouseLayout flexDirection="column">
-      <Box marginBottom={compactMouse ? 0 : 1}>
+      <MouseLayout marginBottom={compactMouse ? 0 : 1}>
         <Text bold color={theme.colors.focus.active}>
           {compactMouse ? 'INPUT LAB / 04 · MOUSE CONTRACT' : 'INPUT LAB / 04'}
         </Text>
         {!compactMouse && (
           <Text color={theme.colors.text.muted}>  /  observable contracts, not assumptions</Text>
         )}
-      </Box>
+      </MouseLayout>
       <Tabs
         tabs={interactionTabs}
         activeTabId={activeTab}
@@ -917,30 +1485,33 @@ function InteractionScreen() {
           />
         )}
         {activeTab === 'keys' && (
-          <Panel title="EventTracer + KeyboardDebugInspector">
+          <MeasuredPanel title="EventTracer + KeyboardDebugInspector">
             <Text color={theme.colors.text.secondary}>
               Normalized navigation keys reaching a low-priority observer.
             </Text>
             <Text color={theme.colors.text.muted}>
               Inputs consumed earlier are not shown; this is not a full dispatch-chain log.
             </Text>
-            <Box marginTop={1}>
+            <MouseLayout marginTop={1}>
               <KeyboardDebugInspector key={traceRevision} tracer={tracer} />
-            </Box>
-          </Panel>
+            </MouseLayout>
+          </MeasuredPanel>
         )}
         {activeTab === 'mouse' && (
           <MouseContractDemo
             compact={compactMouse}
-            shellScrollable={mouseShellScrollable}
+            shellScrollable={shellScrollable}
+            brandHovered={brandHovered}
+            pointerMessage={pointerMessage}
+            dragMessage={dragMessage}
           />
         )}
         {activeTab === 'experimental' && <ExperimentalDemo />}
       </MouseLayout>
       {!compactMouse && (
-        <Box marginTop={1}>
+        <MouseLayout marginTop={1}>
           <Text color={theme.colors.text.muted}>←/→ changes section · Tab moves between focus zones · Esc closes overlays.</Text>
-        </Box>
+        </MouseLayout>
       )}
     </MouseLayout>
   )
@@ -949,9 +1520,9 @@ function InteractionScreen() {
 function FocusTreeDemo({ onChoose }: { onChoose: (value: string) => void }) {
   const theme = useTheme()
   return (
-    <Panel title="FocusTree / zones + roving groups">
-      <Text color={theme.colors.text.secondary}>Tab switches zone · ↑/↓ moves inside a group · Enter chooses.</Text>
-      <Box marginTop={1} flexDirection="column">
+    <MeasuredPanel title="FocusTree / zones + roving groups">
+      <Text color={theme.colors.text.secondary}>Click a row to choose · Tab switches zone · ↑/↓ moves focus.</Text>
+      <MouseLayout marginTop={1} flexDirection="column">
         <FocusZonePanel
           zoneId="showcase-focus-navigation"
           groupId="showcase-focus-navigation-items"
@@ -960,7 +1531,7 @@ function FocusTreeDemo({ onChoose }: { onChoose: (value: string) => void }) {
           items={['Open a route', 'Return to root']}
           onChoose={onChoose}
         />
-        <Box marginTop={1}>
+        <MouseLayout marginTop={1}>
           <FocusZonePanel
             zoneId="showcase-focus-actions"
             groupId="showcase-focus-action-items"
@@ -969,12 +1540,12 @@ function FocusTreeDemo({ onChoose }: { onChoose: (value: string) => void }) {
             items={['Inspect a control', 'Check a session']}
             onChoose={onChoose}
           />
-        </Box>
-      </Box>
-      <Box marginTop={1}>
+        </MouseLayout>
+      </MouseLayout>
+      <MouseLayout marginTop={1}>
         <Text color={theme.colors.text.muted}>The cyan marker is current roving focus; Tab shifts the active zone.</Text>
-      </Box>
-    </Panel>
+      </MouseLayout>
+    </MeasuredPanel>
   )
 }
 
@@ -1018,49 +1589,62 @@ function FocusGroupPanel({
   onChoose: (value: string) => void
 }) {
   const theme = useTheme()
-  const { GroupProvider, focusedId, isActive } = useFocusGroup(groupId, {
+  const {
+    GroupProvider,
+    focusedId,
+    isActive,
+    activate: activateGroup,
+  } = useFocusGroup(groupId, {
     autoFocus: true,
     scope: 'navigation',
   })
   const itemIds = items.map((_, index) => `${groupId}-${index}`)
-  const focusRef = useRef({ focusedId, isActive, items, itemIds, onChoose })
-  focusRef.current = { focusedId, isActive, items, itemIds, onChoose }
-
-  useKeyHandler(
-    (event) => {
-      const current = focusRef.current
-      if (!current.isActive || !event.enter) return InputConsumptionResult.NotConsumed
-      const index = current.itemIds.indexOf(current.focusedId ?? '')
-      if (index >= 0) current.onChoose(current.items[index])
-      return InputConsumptionResult.Consumed
-    },
-    'navigation',
-    { enabled: isActive },
-  )
-
   return (
     <GroupProvider>
-      <Box flexDirection="column">
+      <MouseLayout flexDirection="column">
         <Text bold color={theme.colors.text.muted}>{title}</Text>
         {items.map((label, index) => (
-          <FocusRow key={itemIds[index]} id={itemIds[index]} label={label} />
+          <FocusRow
+            key={itemIds[index]}
+            id={itemIds[index]}
+            label={label}
+            focused={isActive && focusedId === itemIds[index]}
+            onActivate={() => {
+              activateGroup()
+              onChoose(label)
+            }}
+          />
         ))}
-      </Box>
+      </MouseLayout>
     </GroupProvider>
   )
 }
 
-function FocusRow({ id, label }: { id: string; label: string }) {
-  const theme = useTheme()
-  const { focused } = useFocusable({ id })
+function FocusRow({
+  id,
+  label,
+  focused,
+  onActivate,
+}: {
+  id: string
+  label: string
+  focused: boolean
+  onActivate: () => void
+}) {
+  const { onActivate: focusRow } = useFocusable({ id })
   return (
-    <Text color={focused ? theme.colors.focus.ring : theme.colors.text.primary} bold={focused}>
+    <Button
+      variant="default"
+      focused={focused}
+      onActivate={() => {
+        focusRow()
+        onActivate()
+      }}
+    >
       {focused ? '› ' : '  '}{label}
-    </Text>
+    </Button>
   )
 }
-
-const mouseBounds = { x: 0, y: 0, width: 24, height: 1 }
 
 const mouseListRows = [
   { id: 'overview', label: '01 / Overview · route map' },
@@ -1075,9 +1659,15 @@ const mouseListRows = [
 function MouseContractDemo({
   compact,
   shellScrollable,
+  brandHovered,
+  pointerMessage,
+  dragMessage,
 }: {
   compact: boolean
   shellScrollable: boolean
+  brandHovered: boolean
+  pointerMessage: string
+  dragMessage: string
 }) {
   const theme = useTheme()
   const { toast } = useToast()
@@ -1095,18 +1685,10 @@ function MouseContractDemo({
       paddingX={compact ? 0 : 2}
     >
       <Text bold color={theme.colors.text.primary}>
-        MouseLayout / automatic targets
-      </Text>
-      <Text color={theme.colors.text.secondary}>
         {compact
-          ? 'Click controls · Enter activates · wheel scrolls the List.'
-          : 'Click tabs, the button, or a List row.'}
+          ? 'MouseLayout / measured targets · click rows'
+          : 'MouseLayout / measured targets'}
       </Text>
-      {!compact && (
-        <Text color={theme.colors.text.secondary}>
-          Enter activates; the List scrolls first, then an overflowing shell viewport can scroll.
-        </Text>
-      )}
 
       <MouseLayout flexDirection="row" gap={2}>
         <Button
@@ -1121,14 +1703,28 @@ function MouseContractDemo({
 
       <MouseLayout flexDirection="column">
         <Text bold color={theme.colors.text.primary}>
-          Scrollable List / 7 rows · shows 3
+          Hover + drag / app name in the top bar
+        </Text>
+        <Text color={brandHovered ? theme.colors.focus.ring : theme.colors.text.secondary}>
+          {compact ? dragMessage || pointerMessage : pointerMessage}
+        </Text>
+        {!compact && (
+          <Text color={theme.colors.text.secondary}>
+            {dragMessage || 'Press and move on the app name to test dragging.'}
+          </Text>
+        )}
+      </MouseLayout>
+
+      <MouseLayout flexDirection="column">
+        <Text bold color={theme.colors.text.primary}>
+          Scrollable List / 7 rows · shows {compact ? 1 : 3}
         </Text>
         <List
           items={mouseListRows}
           selectedId={focusedRow}
           onSelect={setFocusedRow}
           onActivate={() => setListActivations((count) => count + 1)}
-          maxVisible={3}
+          maxVisible={compact ? 1 : 3}
           renderItem={(item, state) => (
             <Text
               color={
@@ -1138,6 +1734,7 @@ function MouseContractDemo({
                     ? theme.colors.focus.active
                     : theme.colors.text.primary
               }
+              underline={state.hovered}
               bold={state.focused || state.selected}
             >
               {state.focused ? '› ' : '  '}{item.label}
@@ -1145,36 +1742,11 @@ function MouseContractDemo({
           )}
         />
         <Text color={theme.colors.text.muted}>Keyboard focus: {focusedLabel}</Text>
-        <Text color={theme.colors.text.muted}>List activations: {listActivations}</Text>
-      </MouseLayout>
-
-      <MouseLayout flexDirection="column">
-        <Text bold color={theme.colors.text.primary}>
-          MouseArea / caller-owned geometry
-        </Text>
-        <Text color={theme.colors.text.secondary}>
-          {compact
-            ? 'Click-only target · bounds stay at (0,0), not on this row.'
-            : 'MouseArea is click-only: no hover, drag, or wheel.'}
-        </Text>
         {!compact && (
-          <Text color={theme.colors.text.secondary}>
-            Bounds stay fixed at (0,0), not on this row.
+          <Text color={theme.colors.text.muted}>
+            List activations: {listActivations}
           </Text>
         )}
-        <MouseLayout>
-          <MouseArea
-            bounds={mouseBounds}
-            scope="navigation"
-            onClick={({ x, y }) =>
-              toast('info', 'Reported click: x=' + x + ', y=' + y + '.')
-            }
-          >
-            <Text color={theme.colors.focus.active}>
-              [ demo target · x=0 y=0 w=24 h=1 ]
-            </Text>
-          </MouseArea>
-        </MouseLayout>
       </MouseLayout>
 
       {(!compact || shellScrollable) && (
@@ -1185,7 +1757,7 @@ function MouseContractDemo({
               : 'List handles wheel; this Mouse tab stays in normal flow.'}
           </Text>
           <Text color={theme.colors.text.muted}>
-            Live origin (0,0) is a consumer assertion.
+            MouseLayout uses the alternate-screen origin at (0,0).
           </Text>
           <Text color={theme.colors.text.muted}>
             The app opts into alternate screen.
@@ -1195,7 +1767,7 @@ function MouseContractDemo({
           </Text>
           {shellScrollable && (
             <Text color={theme.colors.text.muted}>
-              Mouse report capture is TTY-gated; input uses SGR.
+              Terminal mouse reports use SGR; Windows host normalizes native events.
             </Text>
           )}
         </MouseLayout>
@@ -1224,34 +1796,39 @@ function ExperimentalDemo() {
   useKeyBinding('g', goToProcess, 'navigation')
 
   return (
-    <Panel title="Experimental / explicitly labeled">
+    <MeasuredPanel title="Experimental / explicitly labeled">
       <Text color={theme.colors.text.secondary}>ScreenTransition wraps every route change in this lab.</Text>
       <Text color={theme.colors.text.muted}>KeyboardRegistry is experimental metadata; this live “g” route uses useKeyBinding.</Text>
-      <Box marginTop={1} flexDirection="column">
+      <MouseLayout marginTop={1} flexDirection="column">
         {keyboardRegistry.getAll().map((binding) => (
           <Text key={`${binding.scope}:${binding.keys}`} color={theme.colors.text.primary}>
             {binding.keys}  {binding.description}  <Text dimColor>({binding.scope})</Text>
           </Text>
         ))}
-      </Box>
-      <Box marginTop={1}>
+      </MouseLayout>
+      <MouseLayout marginTop={1}>
         <Text color={theme.colors.text.muted}>Scoped actions: </Text>
         <Text color={theme.colors.focus.active}>{actions.length}</Text>
         <Text color={theme.colors.text.muted}> · detected collisions: </Text>
         <Text color={collisions.length ? theme.colors.status.warning : theme.colors.status.success}>
           {collisions.length}
         </Text>
-      </Box>
+      </MouseLayout>
       {collisions.length > 0 && (
-        <Box flexDirection="column">
+        <MouseLayout flexDirection="column">
           {collisions.slice(0, 2).map((collision) => (
             <Text key={`${collision.action1Id}:${collision.action2Id}`} color={theme.colors.status.warning}>
               {collision.key} · {collision.scope1}/{collision.scope2}
             </Text>
           ))}
-        </Box>
+        </MouseLayout>
       )}
-    </Panel>
+      <MouseLayout marginTop={1}>
+        <Button variant="primary" onActivate={goToProcess}>
+          Open process session
+        </Button>
+      </MouseLayout>
+    </MeasuredPanel>
   )
 }
 

@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type ReactNode,
@@ -17,7 +18,12 @@ import {
   type MouseWheelDirection,
   type SgrMousePacket,
 } from './MouseInputParser.js'
-import type { MouseBounds, MouseClickEvent } from './MouseArea.js'
+import type {
+  MouseBounds,
+  MouseClickEvent,
+  MouseDragEvent,
+  MousePointerEvent,
+} from './MouseArea.js'
 import type { MouseEventSource } from './MouseEventSource.js'
 import type { NormalizedMouseEvent } from './SgrMouseStreamParser.js'
 
@@ -25,14 +31,17 @@ import type { NormalizedMouseEvent } from './SgrMouseStreamParser.js'
 export type { MouseWheelDirection } from './MouseInputParser.js'
 
 /**
- * xterm mouse modes enabled while an interactive TTY is available: normal
- * tracking (`1000`, press/release only — no motion/hover/drag) plus SGR
+ * xterm mouse modes enabled while an interactive TTY is available: any-event
+ * tracking (`1003`, reports hover motion and button-held drag motion) plus SGR
  * extended coordinates (`1006`).
  */
-export const MOUSE_ENABLE_SEQUENCE = '\u001B[?1000h\u001B[?1006h'
+export const MOUSE_ENABLE_SEQUENCE = '\u001B[?1003h\u001B[?1006h'
 
-/** Balanced reset for {@link MOUSE_ENABLE_SEQUENCE}. */
-export const MOUSE_RESET_SEQUENCE = '\u001B[?1000l\u001B[?1006l'
+/**
+ * Balanced reset for {@link MOUSE_ENABLE_SEQUENCE}. The reverse order disables
+ * SGR encoding before the tracking mode that feeds it.
+ */
+export const MOUSE_RESET_SEQUENCE = '\u001B[?1006l\u001B[?1003l'
 
 /**
  * How long a plausible `[<...` prefix is held before its original records are
@@ -43,8 +52,9 @@ export const DEFAULT_MOUSE_PREFIX_TIMEOUT_MS = 60
 
 /**
  * Registration record shared between `MouseArea` and the provider registry.
- * `MouseArea` mutates the same record in place so bounds changes do not alter
- * registration order.
+ * `MouseArea` installs committed values into the same record in place from a
+ * commit-phase layout effect (then reports the change through the registry),
+ * so bounds changes do not alter registration order.
  */
 export interface MouseAreaRegistration {
   /** Stable per-area id. */
@@ -54,6 +64,37 @@ export interface MouseAreaRegistration {
   priority: number
   disabled: boolean
   onClick?: (event: MouseClickEvent) => void
+  /**
+   * Fired when this area becomes the hover target: a motion report resolved it
+   * as the topmost eligible target under the pointer and it is enabled, or a
+   * committed registry/modal change placed it under the stationary pointer.
+   */
+  onEnter?: (event: MousePointerEvent) => void
+  /**
+   * Fired when this area stops being the hover target: motion resolved a
+   * different target, this area itself became disabled, or a committed
+   * registry/modal change rerouted hover while the pointer was stationary.
+   * Never fired for a torn-down record.
+   */
+  onLeave?: (event: MousePointerEvent) => void
+  /** Fired on every motion while this area is the hover target. */
+  onMove?: (event: MousePointerEvent) => void
+  /**
+   * Fired when a left press on this area turns into a drag: the first motion
+   * that reaches a different cell than the press (zero threshold).
+   * `startX`/`startY` are the press cell.
+   */
+  onDragStart?: (event: MouseDragEvent) => void
+  /** Fired for every later motion, even outside this area's bounds. */
+  onDragMove?: (event: MouseDragEvent) => void
+  /** Fired when the drag is released; the click is suppressed. */
+  onDragEnd?: (event: MouseDragEvent) => void
+  /**
+   * Fired when an in-flight drag is cancelled (disabled, unhittable, scope or
+   * modal change, source change) while this area is still registered. Never
+   * fired for a torn-down record or during provider teardown.
+   */
+  onDragCancel?: (event: MouseDragEvent) => void
   /** Discriminator reserved for wheel-only records; click areas leave it unset. */
   wheelOnly?: false
 }
@@ -111,6 +152,65 @@ interface RegisteredArea {
    * background areas (registered before the modal opened) stay unreachable.
    */
   modalLayer: boolean
+  /**
+   * Routing-relevant committed field values at the last registration or
+   * change notification. Callback identity, wheel ancestry and registration
+   * order are intentionally excluded so a callback-only re-render never
+   * schedules committed reconciliation.
+   */
+  snapshot: RegistrationSnapshot
+}
+
+/**
+ * Committed values of the fields that can change hover/click resolution for
+ * one registered record. Compared by value, never stored by reference, so a
+ * bounds object recreated with identical numbers is not a change.
+ */
+interface RegistrationSnapshot {
+  x: number
+  y: number
+  width: number
+  height: number
+  scope: FocusScope | undefined
+  priority: number
+  disabled: boolean
+}
+
+/** Capture the routing-relevant committed fields of a record. */
+function snapshotRegistration(area: MouseRegistration): RegistrationSnapshot {
+  return {
+    x: area.bounds.x,
+    y: area.bounds.y,
+    width: area.bounds.width,
+    height: area.bounds.height,
+    scope: area.scope,
+    priority: area.priority,
+    // Only click areas carry `disabled`; wheel regions never do.
+    disabled: isWheelRegion(area) ? false : area.disabled,
+  }
+}
+
+/**
+ * Whether a record's current committed values differ from its stored
+ * snapshot. Compares in place (no allocation on the common no-change path);
+ * `Object.is` keeps a malformed (`NaN`) component equal to itself, so a
+ * record with invalid bounds does not report a change on every commit it
+ * survives.
+ */
+function registrationSnapshotChanged(
+  snapshot: RegistrationSnapshot,
+  area: MouseRegistration,
+): boolean {
+  const { bounds } = area
+  return (
+    !Object.is(snapshot.x, bounds.x) ||
+    !Object.is(snapshot.y, bounds.y) ||
+    !Object.is(snapshot.width, bounds.width) ||
+    !Object.is(snapshot.height, bounds.height) ||
+    snapshot.scope !== area.scope ||
+    !Object.is(snapshot.priority, area.priority) ||
+    snapshot.disabled !== (isWheelRegion(area) ? false : area.disabled)
+  )
 }
 
 interface PendingPress {
@@ -129,6 +229,33 @@ interface PendingPress {
   modalStack: readonly unknown[]
 }
 
+/**
+ * In-flight drag capture. Created by a left press on an eligible enabled area;
+ * it survives pointer movement outside the area's bounds and is dropped when
+ * the entry is torn down or stops being valid for the gesture.
+ */
+interface PendingDrag {
+  /** Captured click-area record; its identity keys the capture. */
+  area: MouseAreaRegistration
+  /** Press cell; the drag origin reported as `startX`/`startY`. */
+  startX: number
+  startY: number
+  /** Last cell seen while the capture was valid; reported on cancellation. */
+  lastX: number
+  lastY: number
+  /** Modal stack identity at press; any change cancels the capture. */
+  modalStack: readonly unknown[]
+  /** Whether the first changed-cell motion has started the drag. */
+  started: boolean
+}
+
+/** Hover reconciliation result for one motion report (diagnostics only). */
+interface HoverOutcome {
+  reason: 'hover-dispatched' | 'hover-consumed' | 'hover-no-target'
+  targetId: number | null
+  dispatched: boolean
+}
+
 /** Internal registry contract consumed by `MouseArea` and `MouseScrollLayout`. */
 export interface MouseRegistryValue {
   /**
@@ -142,6 +269,16 @@ export interface MouseRegistryValue {
    * idempotent unregister.
    */
   registerWheelRegion: (area: MouseWheelRegistration) => () => void
+  /**
+   * Internal commit-phase change report from `MouseArea`/`useAutoMouseArea`
+   * after installing a record's committed values. The provider compares only
+   * routing-relevant fields (bounds/scope/priority/disabled) and queues one
+   * coalesced re-hit-test at the last known pointer when they changed;
+   * callback identity changes are ignored, so a handler that re-renders
+   * itself cannot loop through committed reconciliation. Unknown, replaced
+   * and wheel-only records are no-ops.
+   */
+  notifyAreaChanged: (area: MouseRegistration) => void
 }
 
 const MouseRegistryContext = createContext<MouseRegistryValue | null>(null)
@@ -206,6 +343,7 @@ export type MouseDiagnosticAction =
   | 'release'
   | 'wheel-up'
   | 'wheel-down'
+  | 'move'
 
 /** Why a packet dispatched or was consumed without activating anything. */
 export type MouseDiagnosticReason =
@@ -225,6 +363,14 @@ export type MouseDiagnosticReason =
   | 'unsupported-button'
   | 'wheel-routed'
   | 'wheel-no-target'
+  | 'hover-dispatched'
+  | 'hover-consumed'
+  | 'hover-no-target'
+  | 'drag-start'
+  | 'drag-move'
+  | 'drag-end'
+  | 'drag-cancel'
+  | 'drag-ignored'
 
 /**
  * One opt-in routing diagnostic for a single SGR packet. Reports the packet
@@ -277,11 +423,12 @@ export interface MouseProviderProps {
   diagnostics?: (event: MouseDiagnosticEvent) => void
   /**
    * Optional normalized mouse event source (for example a native input
-   * multiplexer). When provided, clicks and wheel notches are consumed from
-   * this channel and the legacy post-Ink SGR interceptor stays unregistered,
-   * so a report delivered through both transports can never dispatch twice.
-   * When omitted, routing is unchanged: the post-Ink SGR parser is the only
-   * source. The provider never subscribes to `stdin` for this channel.
+   * multiplexer). When provided, clicks, motion and wheel notches are consumed
+   * from this channel and the legacy post-Ink SGR interceptor stays
+   * unregistered, so a report delivered through both transports can never
+   * dispatch twice. When omitted, routing is unchanged: the post-Ink SGR
+   * parser is the only source. The provider never subscribes to `stdin` for
+   * this channel.
    */
   mouseEventSource?: MouseEventSource
 }
@@ -306,12 +453,23 @@ const SGR_MODIFIER_CTRL = 16
 const SGR_WHEEL_UP = 64
 const SGR_WHEEL_DOWN = 65
 
+/** SGR button bit 32: this report is pointer motion, not a button event. */
+const SGR_MOTION_BIT = 32
+/** SGR button bit 128: extra buttons; never a supported report. */
+const SGR_EXTRA_BUTTON_BIT = 128
+/** Low two bits of an SGR button code: which physical button is involved. */
+const SGR_BUTTON_BASE_MASK = 3
+/** Motion report with the left button held (bit 32, base 0). */
+const SGR_MOTION_LEFT = SGR_MOTION_BIT
+/** Motion report with no button held (bit 32, base 3). */
+const SGR_MOTION_NONE = SGR_MOTION_BIT | 3
+
 /**
  * Re-encode one normalized source event as the packet shape the single router
  * consumes. Modifier bits are preserved (they decorate wheel decoding but
  * never move the button base), so hit testing, press/release pairing,
- * modal/scope eligibility and wheel depth routing are shared with the post-Ink
- * SGR path by construction.
+ * hover/drag routing, modal/scope eligibility and wheel depth routing are
+ * shared with the post-Ink SGR path by construction.
  */
 function normalizedEventToPacket(event: NormalizedMouseEvent): SgrMousePacket {
   const modifiers =
@@ -322,6 +480,16 @@ function normalizedEventToPacket(event: NormalizedMouseEvent): SgrMousePacket {
     return {
       button:
         (event.direction === 'up' ? SGR_WHEEL_UP : SGR_WHEEL_DOWN) | modifiers,
+      x: event.x,
+      y: event.y,
+      kind: 'press',
+    }
+  }
+  if (event.type === 'move') {
+    return {
+      button:
+        (event.button === 'left' ? SGR_MOTION_LEFT : SGR_MOTION_NONE) |
+        modifiers,
       x: event.x,
       y: event.y,
       kind: 'press',
@@ -374,8 +542,41 @@ function normalizedEventToPacket(event: NormalizedMouseEvent): SgrMousePacket {
  *   also consumes the report.
  * - Wheel-only regions never participate in click hit testing, and wheel
  *   dispatch never invokes `onClick`.
- * - Only left press/release and wheel presses dispatch; all other valid SGR
- *   reports are consumed silently.
+ * - Motion reports (SGR bit 32 with base 0 left-held / base 3 unheld, plus the
+ *   normalized `move` source variant) never activate clicks. Every motion
+ *   report updates hover, including button-held motion while a drag capture is
+ *   active: the topmost eligible area under the point receives `onEnter` when
+ *   it becomes the hover target, `onLeave` when motion moves to a different
+ *   target, and `onMove` on every motion. A disabled topmost target consumes
+ *   hover without callbacks and never passes through to areas underneath.
+ * - Hover also re-resolves on committed registry changes without waiting for
+ *   the next motion: registering or unregistering a click area, a
+ *   commit-phase change to a registered area's bounds/scope/priority/disabled
+ *   state (reported by `MouseArea` and `useAutoMouseArea`), and modal-stack
+ *   changes each queue one coalesced microtask that re-runs hit testing at
+ *   the last pointer cell seen in a motion report. Only hover transitions
+ *   dispatch: `onEnter`/`onLeave` (a changed target, or the hovered record
+ *   becoming disabled in place), never a synthetic `onMove`, click or drag.
+ *   A departed record is dropped silently (no callback into a
+ *   torn-down tree) and a survivor under the stationary pointer may be
+ *   entered once. No known pointer, provider teardown and source swaps
+ *   suppress the re-check entirely. Active scope-stack changes without an
+ *   area commit do not schedule one; the next motion resolves them.
+ * - A left press on an eligible enabled target captures that entry for
+ *   dragging. The first motion that reaches a different cell starts the drag
+ *   (zero threshold) and dispatches `onDragStart` then `onDragMove`; later
+ *   motions dispatch `onDragMove` to the captured entry even outside its
+ *   bounds, and release dispatches `onDragEnd` while suppressing the click.
+ *   Releasing without motion keeps the exact click semantics above. An
+ *   unregistered/replaced capture, a disabled, unhittable or ineligible
+ *   capture, a modal-stack change or a source change cancels the capture:
+ *   `onDragCancel` fires only while the captured entry is still registered —
+ *   never for a torn-down record and never during provider teardown — and a
+ *   cancelled gesture can never click. A source change also clears the pending
+ *   click press unconditionally (even before a drag started) and resets hover,
+ *   so no gesture can straddle two channels.
+ * - Only left press/release, motion and wheel presses dispatch; all other
+ *   valid SGR reports are consumed silently.
  *
  * Modal state comes from `useNavigation().isModalOpen` (the single owner of
  * the modal stack), not from keyboard scope membership: `ModalProvider`
@@ -421,11 +622,62 @@ export function MouseProvider({
   const areasRef = useRef<Map<number, RegisteredArea>>(new Map())
   const orderRef = useRef(0)
   const pendingPressRef = useRef<PendingPress | null>(null)
+  /**
+   * Current hover target record: the area that received `onEnter` and has not
+   * yet received `onLeave`. Cleared without callbacks when torn down.
+   */
+  const hoverRef = useRef<MouseAreaRegistration | null>(null)
+  /**
+   * Last pointer cell seen in an actual motion report (button held or not).
+   * `null` until the first motion and again after a source swap: committed
+   * re-hit-testing never invents a pointer position. A layout-effect replay
+   * (StrictMode or `<Activity>` hide/show) deliberately keeps it, so hover can
+   * be re-resolved from the stationary pointer when the tree comes back.
+   */
+  const lastKnownPointerRef = useRef<{ x: number; y: number } | null>(null)
+  /**
+   * Latest committed hover re-check. Kept behind a ref so the registry-facing
+   * callbacks stay identity-stable; installed from a commit-phase layout
+   * effect, so a render React abandons can never drive a queued re-check.
+   */
+  const committedHoverRecheckRef = useRef<() => void>(() => {})
+  /** Whether one coalesced committed re-check microtask is already queued. */
+  const hoverRecheckQueuedRef = useRef(false)
+  /** False from provider teardown on; a queued re-check must never dispatch. */
+  const providerAliveRef = useRef(true)
+  /**
+   * In-flight drag capture created by a left press; see {@link PendingDrag}.
+   */
+  const dragRef = useRef<PendingDrag | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const timeoutMsRef = useRef(
     prefixTimeoutMs ?? DEFAULT_MOUSE_PREFIX_TIMEOUT_MS,
   )
   timeoutMsRef.current = prefixTimeoutMs ?? DEFAULT_MOUSE_PREFIX_TIMEOUT_MS
+
+  // ── Committed Hover Reconciliation ────────────────────────────────
+
+  /**
+   * Queue one coalesced committed-state hover re-check. Registration,
+   * unregistration, routing-relevant record updates and modal-stack changes
+   * all funnel through here: any number of commits in the same task collapse
+   * into a single microtask that re-runs hit testing at the last known
+   * pointer and dispatches only target-identity transitions
+   * (`onEnter`/`onLeave`). It never dispatches a synthetic `onMove`, click or
+   * drag callback and does nothing without a known pointer, after provider
+   * teardown, or after a source swap (the pointer is cleared).
+   */
+  const scheduleHoverRecheck = useCallback(() => {
+    if (!providerAliveRef.current) return
+    if (hoverRecheckQueuedRef.current) return
+    hoverRecheckQueuedRef.current = true
+    queueMicrotask(() => {
+      hoverRecheckQueuedRef.current = false
+      // Teardown since scheduling: never dispatch a late callback.
+      if (!providerAliveRef.current) return
+      committedHoverRecheckRef.current()
+    })
+  }, [])
 
   // ── Area Registry ─────────────────────────────────────────────────
 
@@ -434,26 +686,68 @@ export function MouseProvider({
    * id space, one monotonic order. The record is stored by reference so
    * callers can mutate it in place across commits without moving it.
    */
-  const register = useCallback((area: MouseRegistration) => {
-    const order = orderRef.current++
-    areasRef.current.set(area.id, {
-      area,
-      order,
-      modalLayer: modalOpenRef.current,
-    })
-    return () => {
-      const current = areasRef.current.get(area.id)
-      if (!current || current.area !== area) return
-      areasRef.current.delete(area.id)
-      if (pendingPressRef.current?.entry?.area.id === area.id) {
-        pendingPressRef.current = null
+  const register = useCallback(
+    (area: MouseRegistration) => {
+      const order = orderRef.current++
+      areasRef.current.set(area.id, {
+        area,
+        order,
+        modalLayer: modalOpenRef.current,
+        snapshot: snapshotRegistration(area),
+      })
+      // A newly registered click area may already sit under the last known
+      // pointer and take over hover with no further motion (for example a
+      // toast row appearing over the content). Wheel-only regions never
+      // affect hover.
+      if (!isWheelRegion(area)) scheduleHoverRecheck()
+      return () => {
+        const current = areasRef.current.get(area.id)
+        if (!current || current.area !== area) return
+        areasRef.current.delete(area.id)
+        if (pendingPressRef.current?.entry?.area.id === area.id) {
+          pendingPressRef.current = null
+        }
+        // A torn-down record must never receive later hover or drag callbacks:
+        // both transients are dropped silently (no `onLeave`/`onDragCancel`).
+        if (dragRef.current?.area === area) {
+          dragRef.current = null
+        }
+        if (hoverRef.current === area) {
+          hoverRef.current = null
+        }
+        // A click-area departure can change resolution either way: the
+        // departed hover target is dropped silently and a survivor under the
+        // stationary pointer may be entered once, while removing a disabled
+        // or covering record can reveal an eligible target underneath. One
+        // coalesced re-check covers both; wheel-only records never hover.
+        if (!isWheelRegion(area)) scheduleHoverRecheck()
       }
-    }
-  }, [])
+    },
+    [scheduleHoverRecheck],
+  )
 
   const registerArea: (area: MouseAreaRegistration) => () => void = register
   const registerWheelRegion: (area: MouseWheelRegistration) => () => void =
     register
+
+  /**
+   * Commit-phase change report from `MouseArea`/`useAutoMouseArea`. Unknown,
+   * replaced and wheel-only records are ignored. A click record whose
+   * committed bounds/scope/priority/disabled actually changed queues one
+   * coalesced re-check; callback identity changes never schedule, so a
+   * handler that re-renders itself cannot feed committed reconciliation.
+   */
+  const notifyAreaChanged = useCallback(
+    (area: MouseRegistration) => {
+      const current = areasRef.current.get(area.id)
+      if (!current || current.area !== area) return
+      if (isWheelRegion(area)) return
+      if (!registrationSnapshotChanged(current.snapshot, area)) return
+      current.snapshot = snapshotRegistration(area)
+      scheduleHoverRecheck()
+    },
+    [scheduleHoverRecheck],
+  )
 
   // ── Hit Testing / Dispatch ────────────────────────────────────────
 
@@ -662,6 +956,266 @@ export function MouseProvider({
     [findWheelTarget, isEligible],
   )
 
+  // ── Hover / Drag Routing ──────────────────────────────────────────
+
+  /** Whether the captured record is still registered with the same identity. */
+  const isDragEntryRegistered = useCallback((drag: PendingDrag): boolean => {
+    const current = areasRef.current.get(drag.area.id)
+    return current !== undefined && current.area === drag.area
+  }, [])
+
+  /**
+   * Whether an in-flight capture may still receive drag callbacks: the record
+   * must be the same registered entry (not unregistered, replaced or
+   * re-registered), still hittable, enabled, eligible under the current
+   * scope/modal routing, and under the modal stack identity captured at press.
+   */
+  const isDragEntryValid = useCallback(
+    (drag: PendingDrag): boolean => {
+      const current = areasRef.current.get(drag.area.id)
+      if (current === undefined || current.area !== drag.area) return false
+      const area = drag.area
+      if (!isHittableBounds(area.bounds)) return false
+      if (area.disabled) return false
+      if (modalStackRef.current !== drag.modalStack) return false
+      return isEligible(current)
+    },
+    [isEligible],
+  )
+
+  /**
+   * Drop the in-flight capture. A started drag clears the pending click press,
+   * so a stale release can never activate. `onDragCancel` runs only for a
+   * started drag whose record is still registered — never for a torn-down
+   * record and never during provider teardown.
+   */
+  const cancelDrag = useCallback(
+    (clearPending: boolean): void => {
+      const drag = dragRef.current
+      if (drag === null) return
+      dragRef.current = null
+      if (clearPending || drag.started) {
+        pendingPressRef.current = null
+      }
+      if (drag.started && isDragEntryRegistered(drag)) {
+        drag.area.onDragCancel?.({
+          x: drag.lastX,
+          y: drag.lastY,
+          startX: drag.startX,
+          startY: drag.startY,
+        })
+      }
+    },
+    [isDragEntryRegistered],
+  )
+
+  /**
+   * Shared hover resolution for one point: dispatches `onLeave` when the
+   * current hover record is no longer the topmost eligible target (or became
+   * disabled in place), then `onEnter` when the target changed to a new
+   * enabled record. A disabled topmost target consumes: it is never entered
+   * and never passed through to areas underneath. Never dispatches `onMove` —
+   * motion routing adds that separately, so committed re-checks stay
+   * transition-only.
+   */
+  const reconcileHoverTarget = useCallback(
+    (
+      x: number,
+      y: number,
+    ): { target: MouseAreaRegistration | null; dispatched: boolean } => {
+      const resolved = findTarget(x, y)
+      const target =
+        resolved !== null && !isWheelRegion(resolved.area)
+          ? resolved.area
+          : null
+      const hovered = hoverRef.current
+      let dispatched = false
+      // A disabled record is never a hover target: leave when the resolved
+      // target changed, and also when the hovered record itself just became
+      // disabled in place (its identity did not change).
+      if (
+        hovered !== null &&
+        (hovered !== target || (target !== null && target.disabled))
+      ) {
+        hoverRef.current = null
+        const onLeave = hovered.onLeave
+        onLeave?.({ x, y })
+        dispatched = onLeave !== undefined
+      }
+      if (target === null || target.disabled) {
+        // A missing target or a disabled topmost target consumes hover: no
+        // pass-through to areas underneath and no entry.
+        return { target, dispatched }
+      }
+      if (hoverRef.current !== target) {
+        hoverRef.current = target
+        const onEnter = target.onEnter
+        onEnter?.({ x, y })
+        dispatched = dispatched || onEnter !== undefined
+      }
+      return { target, dispatched }
+    },
+    [findTarget],
+  )
+
+  /**
+   * Reconcile hover for one motion report: identity transitions from
+   * {@link reconcileHoverTarget} plus `onMove` on every motion. Shared by
+   * hover-only motion and button-held drag motion, so the pointer keeps
+   * tracking areas while a capture stays on the press target.
+   */
+  const reconcileHover = useCallback(
+    (x: number, y: number): HoverOutcome => {
+      const { target, dispatched } = reconcileHoverTarget(x, y)
+      if (target === null) {
+        return { reason: 'hover-no-target', targetId: null, dispatched }
+      }
+      if (target.disabled) {
+        return { reason: 'hover-consumed', targetId: target.id, dispatched }
+      }
+      const onMove = target.onMove
+      let moved = dispatched
+      if (onMove !== undefined) {
+        onMove({ x, y })
+        moved = true
+      }
+      return { reason: 'hover-dispatched', targetId: target.id, dispatched: moved }
+    },
+    [reconcileHoverTarget],
+  )
+
+  /**
+   * Committed-state hover re-check: re-resolve the last known pointer after a
+   * registration, unregistration, routing-relevant record update or modal
+   * change. Dispatches only target-identity transitions and honors the same
+   * scope/modal eligibility and disabled-consumption rules as motion. Never
+   * dispatches `onMove`, click or drag callbacks and never emits diagnostics.
+   */
+  const reconcileCommittedHover = useCallback(() => {
+    const pointer = lastKnownPointerRef.current
+    if (pointer === null) return
+    reconcileHoverTarget(pointer.x, pointer.y)
+  }, [reconcileHoverTarget])
+
+  // Registry-facing callbacks stay identity-stable; this commit-phase effect
+  // installs the latest committed closure a queued re-check should invoke.
+  useLayoutEffect(() => {
+    committedHoverRecheckRef.current = reconcileCommittedHover
+  }, [reconcileCommittedHover])
+
+  /**
+   * Route one motion report. Hover follows every motion (button held or not);
+   * a held left button additionally routes through the drag capture (if any).
+   * Motion never touches the pending click press except to drop a capture
+   * whose entry became invalid, so an unmoved press/release keeps exact click
+   * semantics.
+   */
+  const handleMove = useCallback(
+    (button: 'left' | 'none', x: number, y: number) => {
+      // Only actual motion reports update the known pointer: press, release
+      // and wheel never move it, so committed re-hit-testing can only replay
+      // a cell the pointer was genuinely reported at.
+      lastKnownPointerRef.current = { x, y }
+      const moveAreas = collectAreasIfEnabled(x, y, 'click')
+      const reportMove = (
+        reason: MouseDiagnosticReason,
+        targetId: number | null,
+        dispatched: boolean,
+      ) => {
+        reportDiagnostic({
+          action: 'move',
+          x,
+          y,
+          registeredCount: areasRef.current.size,
+          areaCount: moveAreas.areaCount,
+          eligibleCount: moveAreas.eligibleCount,
+          containingCount: moveAreas.containingCount,
+          targetId,
+          dispatched,
+          reason,
+          modalOpen: modalOpenRef.current,
+          areas: moveAreas.areas,
+        })
+      }
+
+      // Hover tracks the pointer on every motion, including button-held
+      // motion: the pointer can cross other areas while the capture stays on
+      // the press target. A disabled topmost target still consumes hover.
+      const hover = reconcileHover(x, y)
+
+      if (button === 'left') {
+        const drag = dragRef.current
+        if (drag === null) {
+          // A held button without a captured press (press hit nothing or was
+          // cancelled) still updates hover but never becomes a late capture.
+          reportMove('drag-ignored', null, hover.dispatched)
+          return
+        }
+        if (!isDragEntryValid(drag)) {
+          const started = drag.started
+          const registered = isDragEntryRegistered(drag)
+          const onDragCancel = drag.area.onDragCancel
+          cancelDrag(true)
+          reportMove(
+            'drag-cancel',
+            drag.area.id,
+            hover.dispatched ||
+              (started && registered && onDragCancel !== undefined),
+          )
+          return
+        }
+        const area = drag.area
+        drag.lastX = x
+        drag.lastY = y
+        const payload: MouseDragEvent = {
+          x,
+          y,
+          startX: drag.startX,
+          startY: drag.startY,
+        }
+        if (!drag.started) {
+          // Zero threshold: the first motion that reaches a different cell
+          // starts the gesture; a same-cell report is a no-op.
+          if (x === drag.startX && y === drag.startY) {
+            reportMove('drag-ignored', area.id, hover.dispatched)
+            return
+          }
+          drag.started = true
+          const onDragStart = area.onDragStart
+          onDragStart?.(payload)
+          const onDragMove = area.onDragMove
+          onDragMove?.(payload)
+          reportMove(
+            'drag-start',
+            area.id,
+            hover.dispatched ||
+              onDragStart !== undefined ||
+              onDragMove !== undefined,
+          )
+          return
+        }
+        const onDragMove = area.onDragMove
+        onDragMove?.(payload)
+        reportMove(
+          'drag-move',
+          area.id,
+          hover.dispatched || onDragMove !== undefined,
+        )
+        return
+      }
+
+      reportMove(hover.reason, hover.targetId, hover.dispatched)
+    },
+    [
+      collectAreasIfEnabled,
+      reconcileHover,
+      isDragEntryRegistered,
+      isDragEntryValid,
+      cancelDrag,
+      reportDiagnostic,
+    ],
+  )
+
   const handlePacket = useCallback(
     (packet: SgrMousePacket) => {
       // Wheel press reports dispatch before the generic `button > 31` filter,
@@ -690,8 +1244,25 @@ export function MouseProvider({
         return
       }
 
+      // Any-event tracking (1003) motion reports carry bit 32 with no wheel or
+      // extra-button bits: base 0 is a held left button, base 3 means no
+      // button. Both re-enter the same router as normalized moves; middle and
+      // right motion falls through to the unsupported consumption below.
+      if (
+        (packet.button & SGR_MOTION_BIT) !== 0 &&
+        (packet.button & SGR_WHEEL_UP) === 0 &&
+        (packet.button & SGR_EXTRA_BUTTON_BIT) === 0 &&
+        packet.kind === 'press'
+      ) {
+        const motionBase = packet.button & SGR_BUTTON_BASE_MASK
+        if (motionBase === 0 || motionBase === 3) {
+          handleMove(motionBase === 0 ? 'left' : 'none', packet.x, packet.y)
+          return
+        }
+      }
+
       const clickAreas = collectAreasIfEnabled(packet.x, packet.y, 'click')
-      const base = packet.button & 3
+      const base = packet.button & SGR_BUTTON_BASE_MASK
       const isPress = packet.kind === 'press' && base === 0
       const isRelease =
         packet.kind === 'release' && (base === 0 || base === 3)
@@ -723,6 +1294,20 @@ export function MouseProvider({
           disabled: targetArea?.disabled ?? false,
           modalStack: modalStackRef.current,
         }
+        // A press on an eligible enabled target captures it for dragging. A
+        // disabled or missing target captures nothing (the gesture consumes).
+        dragRef.current =
+          targetArea !== null && !targetArea.disabled
+            ? {
+                area: targetArea,
+                startX: packet.x,
+                startY: packet.y,
+                lastX: packet.x,
+                lastY: packet.y,
+                modalStack: modalStackRef.current,
+                started: false,
+              }
+            : null
         reportDiagnostic({
           action: 'press',
           x: packet.x,
@@ -739,6 +1324,65 @@ export function MouseProvider({
               : targetArea.disabled
                 ? 'press-disabled'
                 : 'press-pending',
+          modalOpen: modalOpenRef.current,
+          areas: clickAreas.areas,
+        })
+        return
+      }
+
+      const drag = dragRef.current
+      dragRef.current = null
+      if (drag !== null && drag.started) {
+        // A started drag owns the release: the click is always suppressed.
+        pendingPressRef.current = null
+        const targetId = drag.area.id
+        if (isDragEntryValid(drag)) {
+          const onDragEnd = drag.area.onDragEnd
+          onDragEnd?.({
+            x: packet.x,
+            y: packet.y,
+            startX: drag.startX,
+            startY: drag.startY,
+          })
+          reportDiagnostic({
+            action: 'release',
+            x: packet.x,
+            y: packet.y,
+            registeredCount: areasRef.current.size,
+            areaCount: clickAreas.areaCount,
+            eligibleCount: clickAreas.eligibleCount,
+            containingCount: clickAreas.containingCount,
+            targetId,
+            pressedTargetId: targetId,
+            dispatched: onDragEnd !== undefined,
+            reason: 'drag-end',
+            modalOpen: modalOpenRef.current,
+            areas: clickAreas.areas,
+          })
+          return
+        }
+        const registered = isDragEntryRegistered(drag)
+        const onDragCancel = drag.area.onDragCancel
+        if (registered) {
+          onDragCancel?.({
+            x: drag.lastX,
+            y: drag.lastY,
+            startX: drag.startX,
+            startY: drag.startY,
+          })
+        }
+        reportDiagnostic({
+          action: 'release',
+          x: packet.x,
+          y: packet.y,
+          registeredCount: areasRef.current.size,
+          areaCount: clickAreas.areaCount,
+          eligibleCount: clickAreas.eligibleCount,
+          containingCount: clickAreas.containingCount,
+          targetId,
+          pressedTargetId: targetId,
+          dispatched: registered && onDragCancel !== undefined,
+          reason: 'drag-cancel',
           modalOpen: modalOpenRef.current,
           areas: clickAreas.areas,
         })
@@ -885,7 +1529,16 @@ export function MouseProvider({
         areas: clickAreas.areas,
       })
     },
-    [collectAreasIfEnabled, dispatchWheel, findTarget, findWheelTarget, reportDiagnostic],
+    [
+      collectAreasIfEnabled,
+      dispatchWheel,
+      findTarget,
+      findWheelTarget,
+      handleMove,
+      isDragEntryRegistered,
+      isDragEntryValid,
+      reportDiagnostic,
+    ],
   )
 
   /**
@@ -977,11 +1630,71 @@ export function MouseProvider({
     })
   }, [mouseEventSource])
 
-  // Unmount hygiene: timers must not outlive the provider.
+  /**
+   * A different channel owns subsequent reports: the previous channel's
+   * gesture is dead. This effect body runs only on an actual source change —
+   * never on unmount — so teardown stays callback-free. The pending click
+   * press is dropped unconditionally (a release from the new channel must
+   * never activate it, even when the drag never started), hover is reset
+   * without a cross-channel transition, and any capture is cancelled
+   * (`onDragCancel` for a started drag whose record is still registered).
+   */
+  const previousSourceRef = useRef(mouseEventSource)
+  useLayoutEffect(() => {
+    if (previousSourceRef.current === mouseEventSource) return
+    previousSourceRef.current = mouseEventSource
+    pendingPressRef.current = null
+    hoverRef.current = null
+    // The old channel's stationary pointer must not drive committed
+    // re-checks on the new channel: hover is only re-established by the new
+    // channel's own motion reports. Commit-synchronous, so a re-check queued
+    // by the same commit (for example a simultaneous bounds change) can never
+    // observe the stale channel's pointer.
+    lastKnownPointerRef.current = null
+    cancelDrag(false)
+  }, [mouseEventSource, cancelDrag])
+
+  /**
+   * Modal stack changes alter eligibility without any area commit, so a
+   * stationary pointer must be re-resolved: a modal opening leaves a
+   * background hover target (and a modal-layer area under the pointer may
+   * enter), while closing does the reverse. Coalesced through the shared
+   * scheduler and subject to the same teardown guard.
+   */
+  const previousModalStackRef = useRef(modalStack)
+  useEffect(() => {
+    if (previousModalStackRef.current === modalStack) return
+    previousModalStackRef.current = modalStack
+    scheduleHoverRecheck()
+  }, [modalStack, scheduleHoverRecheck])
+
+  // Teardown guard: a layout cleanup runs synchronously during the unmount
+  // commit, so a committed re-check scheduled just before unmount can never
+  // observe a live provider and dispatch a late `onEnter`/`onLeave`. (The
+  // passive cleanup below may only flush in a later task.) The setup marks the
+  // provider live on every mount: React dev StrictMode replays mount effects
+  // as setup → cleanup → setup, and a cleanup-only guard would leave the
+  // provider marked dead for the rest of its life, silently disabling all
+  // scheduled geometry re-hit-testing. The cleanup only flips the flag: the
+  // known pointer is deliberately kept across a replay (an `<Activity>`
+  // hide/show or StrictMode replay is not a channel change), while a source
+  // swap clears it explicitly.
+  useLayoutEffect(() => {
+    providerAliveRef.current = true
+    return () => {
+      providerAliveRef.current = false
+    }
+  }, [])
+
+  // Unmount hygiene: timers and pointer transients must not outlive the
+  // provider, and teardown never invokes a user callback.
   useEffect(
     () => () => {
       clearTimer()
       parserRef.current?.reset()
+      pendingPressRef.current = null
+      dragRef.current = null
+      hoverRef.current = null
     },
     [clearTimer],
   )
@@ -1005,8 +1718,8 @@ export function MouseProvider({
   }, [mouseReportingEnabled, write, stdout])
 
   const registry = useMemo<MouseRegistryValue>(
-    () => ({ registerArea, registerWheelRegion }),
-    [registerArea, registerWheelRegion],
+    () => ({ registerArea, registerWheelRegion, notifyAreaChanged }),
+    [registerArea, registerWheelRegion, notifyAreaChanged],
   )
 
   return (

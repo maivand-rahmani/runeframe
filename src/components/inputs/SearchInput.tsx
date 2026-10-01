@@ -22,10 +22,16 @@ export function SearchInput({
 }: SearchInputProps) {
   const isControlled = controlledValue !== undefined
   const [internalValue, setInternalValue] = useState('')
+  const [hovered, setHovered] = useState(false)
   const value = isControlled ? controlledValue : internalValue
   const { colors } = useTheme()
   const inputFocus = useInputFocus()
-  const mouseRef = useAutoMouseArea({ onClick: inputFocus.focus })
+  const mouseRef = useAutoMouseArea({
+    onClick: inputFocus.focus,
+    onEnter: () => setHovered(true),
+    onLeave: () => setHovered(false),
+  })
+  const showHoverCue = hovered
   const { suspend, restore } = useShellSuspension()
 
   const ref = useRef({ value, setInternalValue, onChange, isControlled })
@@ -66,11 +72,15 @@ export function SearchInput({
   return (
     <Box ref={mouseRef}>
       {value.length > 0 ? (
-        <Text>{value}</Text>
+        <Text underline={showHoverCue}>{value}</Text>
       ) : (
-        <Text dimColor>{placeholder}</Text>
+        <Text dimColor underline={showHoverCue}>
+          {placeholder}
+        </Text>
       )}
-      <Text color={colors.focus.ring}>|</Text>
+      <Text color={colors.focus.ring} underline={showHoverCue}>
+        |
+      </Text>
     </Box>
   )
 }

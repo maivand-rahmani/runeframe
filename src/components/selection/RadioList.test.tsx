@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { render } from 'ink-testing-library'
 import { useEffect, type ReactNode } from 'react'
 import type { ReactElement } from 'react'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useKeyboardScope } from '../../interaction/keyboard/KeyboardScopeProvider.js'
@@ -44,6 +45,20 @@ function cellInFrame(frame: string | undefined, text: string) {
   return { x: lines[y].indexOf(text), y }
 }
 
+function isUnderlined(frame: string | undefined) {
+  return /\u001B\[(?:\d+;)*4(?:;\d+)*m/.test(frame ?? '')
+}
+
+async function withColorOutput(run: () => Promise<void>) {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
+}
+
 async function clickCell(
   stdin: { write: (data: string) => unknown },
   cell: { x: number; y: number },
@@ -53,6 +68,19 @@ async function clickCell(
   stdin.write(`\u001B[<0;${x};${y}M`)
   await delay()
   stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+async function moveCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<35;${cell.x + 1};${cell.y + 1}M`)
+  await delay()
+}
+
+async function moveOutside(stdin: { write: (data: string) => unknown }) {
+  stdin.write('\u001B[<35;50;50M')
   await delay()
 }
 
@@ -187,7 +215,7 @@ describe('RadioList', () => {
 
   it('click selects an enabled option and ignores a disabled option', async () => {
     const selected: string[] = []
-    const { stdin } = renderInFramework(
+    const { stdin, lastFrame } = renderInFramework(
       <RadioList
         options={optionsWithDisabled}
         selected={null}
@@ -202,6 +230,10 @@ describe('RadioList', () => {
     )
 
     await delay(100)
+    await moveCell(stdin, { x: 1, y: 2 })
+    expect(selected).toEqual([])
+    await moveOutside(stdin)
+
     stdin.write('\u001B[<0;1;1M')
     await delay()
     stdin.write('\u001B[<0;1;1m')
@@ -212,6 +244,58 @@ describe('RadioList', () => {
     await delay()
 
     expect(selected).toEqual(['a'])
+  })
+
+  it('auto hover does not move keyboard focus or select', async () => {
+    const selected: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <ListScope>
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <RadioList
+            options={optionsWithDisabled}
+            selected={null}
+            onSelect={(value) => selected.push(value)}
+          />
+        </MouseLayout>
+      </ListScope>,
+    )
+
+    await delay(120)
+    await moveCell(stdin, cellInFrame(lastFrame(), 'Alpha'))
+    await moveCell(stdin, cellInFrame(lastFrame(), 'Beta'))
+    await moveCell(stdin, cellInFrame(lastFrame(), 'Gamma'))
+    expect(selected).toEqual([])
+
+    await moveOutside(stdin)
+    stdin.write('\r')
+    await delay()
+    expect(selected).toEqual(['a'])
+  })
+
+  it('keeps the selected, focused option underlined on hover without selecting it', async () => {
+    await withColorOutput(async () => {
+      const selected: string[] = []
+      const { stdin, lastFrame } = renderInFramework(
+        <ListScope>
+          <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+            <RadioList
+              options={sampleOptions}
+              selected="opt2"
+              onSelect={(value) => selected.push(value)}
+            />
+          </MouseLayout>
+        </ListScope>,
+      )
+
+      await delay(120)
+      const selectedRow = cellInFrame(lastFrame(), 'Option 2')
+      await moveCell(stdin, selectedRow)
+      expect(isUnderlined(lastFrame())).toBe(true)
+      expect(selected).toEqual([])
+
+      await clickCell(stdin, selectedRow)
+      expect(selected).toEqual(['opt2'])
+    })
   })
 
   it('automatically hit-tests options, consumes disabled rows, and focuses the clicked option', async () => {

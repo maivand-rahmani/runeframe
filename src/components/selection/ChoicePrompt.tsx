@@ -235,83 +235,112 @@ export function ChoicePrompt<T>({
 
       {keyedItems.map((item, idx) => {
         const isActive = idx === activeIndex
-        const isDisabled = Boolean(item.disabled)
         const sourceItem = items[idx]
         const rowKey = getMouseRowKey(sourceItem, idx)
 
-        const rowContents = (
-          <>
-            <Box>
-              <Text
-                color={
-                  isDisabled
-                    ? colors.text.muted
-                    : isActive
-                      ? colors.focus.active
-                      : colors.text.secondary
-                }
-                dimColor={isDisabled}
-              >
-                {item.key})
-              </Text>
-              <Text
-                color={
-                  isDisabled
-                    ? colors.text.muted
-                    : isActive
-                      ? colors.focus.active
-                      : colors.text.primary
-                }
-                bold={isActive && !isDisabled}
-                dimColor={isDisabled}
-              >
-                {' '}
-                {item.label}
-              </Text>
-            </Box>
-            {item.description && !isDisabled && (
-              <Box>
-                <Text color={colors.text.muted}>
-                  {'  '}
-                  {item.description}
-                </Text>
-              </Box>
-            )}
-          </>
-        )
-
-        if (autoMouseEnabled) {
-          return (
-            <ChoicePromptAutoRow
-              key={rowKey}
-              disabled={isDisabled}
-              onClick={() => handleMouseSelect(sourceItem, idx)}
-            >
-              {rowContents}
-            </ChoicePromptAutoRow>
-          )
-        }
-
         return (
-          <Box key={rowKey} flexDirection="column">
-            {rowContents}
-          </Box>
+          <ChoicePromptRow
+            key={rowKey}
+            item={item}
+            active={isActive}
+            autoMouseEnabled={autoMouseEnabled}
+            onClick={() => handleMouseSelect(sourceItem, idx)}
+          />
         )
       })}
     </MouseLayout>
   )
 }
 
+function ChoicePromptRow<T>({
+  item,
+  active,
+  autoMouseEnabled,
+  onClick,
+}: {
+  item: ChoiceItem<T> & { key: string }
+  active: boolean
+  autoMouseEnabled: boolean
+  onClick: () => void
+}) {
+  const { colors } = useTheme()
+  const [hovered, setHovered] = useState(false)
+  const disabled = Boolean(item.disabled)
+  const keyColor = disabled
+    ? colors.text.muted
+    : active
+      ? colors.focus.active
+      : hovered
+        ? colors.focus.selected
+        : colors.text.secondary
+  const labelColor = disabled
+    ? colors.text.muted
+    : active
+      ? colors.focus.active
+      : hovered
+        ? colors.focus.selected
+        : colors.text.primary
+  const rowContents = (
+    <>
+      <Box>
+        <Text
+          color={keyColor}
+          dimColor={disabled}
+          underline={hovered && !disabled}
+        >
+          {item.key})
+        </Text>
+        <Text
+          color={labelColor}
+          bold={active && !disabled}
+          dimColor={disabled}
+          underline={hovered && !disabled}
+        >
+          {' '}
+          {item.label}
+        </Text>
+      </Box>
+      {item.description && !disabled && (
+        <Box>
+          <Text color={colors.text.muted}>
+            {'  '}
+            {item.description}
+          </Text>
+        </Box>
+      )}
+    </>
+  )
+
+  if (autoMouseEnabled) {
+    return (
+      <ChoicePromptAutoRow
+        disabled={disabled}
+        onClick={onClick}
+        onEnter={() => setHovered(true)}
+        onLeave={() => setHovered(false)}
+      >
+        {rowContents}
+      </ChoicePromptAutoRow>
+    )
+  }
+
+  return <Box flexDirection="column">{rowContents}</Box>
+}
+
 function ChoicePromptAutoRow({
   children,
   disabled,
   onClick,
+  onEnter,
+  onLeave,
 }: {
   children: ReactNode
   disabled: boolean
   onClick: () => void
+  onEnter: () => void
+  onLeave: () => void
 }) {
-  const ref = useAutoMouseArea({ disabled, onClick })
+  const ref = useAutoMouseArea({ disabled, onClick, onEnter, onLeave })
   return (
     <Box ref={ref} flexDirection="column">
       {children}

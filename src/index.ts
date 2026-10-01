@@ -173,6 +173,8 @@ export type {
   MouseAreaProps,
   MouseBounds,
   MouseClickEvent,
+  MouseDragEvent,
+  MousePointerEvent,
 } from './interaction/mouse/MouseArea.js'
 export { MouseLayout } from './interaction/mouse/MouseLayout.js'
 export type {

@@ -20,6 +20,23 @@ export interface MouseClickEvent {
   y: number
 }
 
+/** Pointer payload with zero-based terminal-cell coordinates. */
+export interface MousePointerEvent {
+  x: number
+  y: number
+}
+
+/**
+ * Drag payload with zero-based terminal-cell coordinates: the current pointer
+ * cell plus the press cell the drag started from.
+ */
+export interface MouseDragEvent {
+  x: number
+  y: number
+  startX: number
+  startY: number
+}
+
 export interface MouseAreaProps {
   /**
    * Absolute zero-based terminal-cell rectangle supplied by the caller.
@@ -46,6 +63,29 @@ export interface MouseAreaProps {
   disabled?: boolean
   /** Fired when a matching left press and release land on this area. */
   onClick?: (event: MouseClickEvent) => void
+  /**
+   * Fired when motion resolves this area as the topmost eligible enabled
+   * target under the pointer (the pointer entered it).
+   */
+  onEnter?: (event: MousePointerEvent) => void
+  /** Fired when the pointer moves from this area to a different target. */
+  onLeave?: (event: MousePointerEvent) => void
+  /** Fired on every motion while this area is the hover target. */
+  onMove?: (event: MousePointerEvent) => void
+  /**
+   * Fired when a left press on this area becomes a drag: the first motion that
+   * reaches a different terminal cell than the press (zero threshold).
+   */
+  onDragStart?: (event: MouseDragEvent) => void
+  /** Fired for every later motion, even outside this area's bounds. */
+  onDragMove?: (event: MouseDragEvent) => void
+  /** Fired when the drag is released; the click is suppressed. */
+  onDragEnd?: (event: MouseDragEvent) => void
+  /**
+   * Fired when an in-flight drag is cancelled (disabled, unhittable, scope or
+   * modal change, source change) while this area is still registered.
+   */
+  onDragCancel?: (event: MouseDragEvent) => void
   children?: ReactNode
 }
 
@@ -60,29 +100,54 @@ export function MouseArea({
   priority = 0,
   disabled = false,
   onClick,
+  onEnter,
+  onLeave,
+  onMove,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+  onDragCancel,
   children,
 }: MouseAreaProps): ReactNode {
   const registry = useMouseRegistry()
   const recordRef = useRef<MouseAreaRegistration | null>(null)
   if (recordRef.current === null) {
+    // One record per instance, allocated before any commit. `id` is fixed at
+    // creation so registration order never moves; every other field is
+    // installed by the commit-phase effect below.
     recordRef.current = {
       id: allocateMouseAreaId(),
       bounds,
       scope,
       priority,
       disabled,
-      onClick,
     }
   }
-
-  // Keep the same registration record (and therefore registration order)
-  // while always exposing the latest props to the provider at dispatch time.
   const record = recordRef.current
-  record.bounds = bounds
-  record.scope = scope
-  record.priority = priority
-  record.disabled = disabled
-  record.onClick = onClick
+
+  // Commit-phase install: the same registration record (and therefore its id
+  // and registration order) receives this commit's values and then notifies
+  // the provider, so a render React abandons can never leak bounds, scope,
+  // disabled state or callbacks into the registry, and a stationary pointer
+  // is re-hit-tested when a routing-relevant field moved. Declared before
+  // registration: on the initial commit the record already carries this
+  // commit's values when it becomes registry-visible, keeping registration
+  // commit-synchronous.
+  useLayoutEffect(() => {
+    record.bounds = bounds
+    record.scope = scope
+    record.priority = priority
+    record.disabled = disabled
+    record.onClick = onClick
+    record.onEnter = onEnter
+    record.onLeave = onLeave
+    record.onMove = onMove
+    record.onDragStart = onDragStart
+    record.onDragMove = onDragMove
+    record.onDragEnd = onDragEnd
+    record.onDragCancel = onDragCancel
+    registry?.notifyAreaChanged(record)
+  })
 
   // Registration must be commit-synchronous: Ink can write a frame containing
   // this area (and a consumer can react to it) before passive effects flush,

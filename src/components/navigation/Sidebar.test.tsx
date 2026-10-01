@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Box, Text } from 'ink'
 import type { ReactElement } from 'react'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { FocusTreeProvider, useFocusable, useFocusGroup } from '../../interaction/focus/FocusTreeProvider.js'
@@ -114,6 +115,28 @@ async function clickCell(
   await delay()
   stdin.write(`\u001B[<0;${x};${y}m`)
   await delay()
+}
+
+async function hoverCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<35;${cell.x + 1};${cell.y + 1}M`)
+  await delay()
+}
+
+function isUnderlined(frame: string | undefined) {
+  return frame?.includes('\u001B[4m') ?? false
+}
+
+async function withColorOutput(run: () => Promise<void>) {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
 }
 
 describe('Sidebar', () => {
@@ -260,7 +283,42 @@ describe('Sidebar', () => {
     expect(lastFrame()).toContain('› Plan')
   })
 
-  it('automatically hit-tests sidebar rows and keeps keyboard focus there', async () => {
+  it('shows and clears hover feedback on an explicit sidebar row without navigation', async () => withColorOutput(async () => {
+    function CurrentScreen() {
+      const { currentScreenId } = useNavigation()
+      return <Text>Current: {currentScreenId}</Text>
+    }
+
+    const { lastFrame, stdin } = render(
+      <FrameworkProvider registry={registry} defaultScreen="dashboard">
+        <Sidebar
+          items={sidebarItems}
+          columns={120}
+          mouseBoundsForItem={(item) =>
+            item.id === 'plan' ? { x: 0, y: 2, width: 24, height: 1 } : undefined
+          }
+        />
+        <CurrentScreen />
+      </FrameworkProvider>,
+    )
+
+    await delay(100)
+    const plan = cellInFrame(lastFrame(), 'Plan')
+    const explicitHit = { x: 2, y: 2 }
+    await hoverCell(stdin, explicitHit)
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(lastFrame()).toContain('Current: dashboard')
+    expect(lastFrame()).not.toContain('› Plan')
+
+    await hoverCell(stdin, { x: explicitHit.x, y: explicitHit.y + 2 })
+    expect(isUnderlined(lastFrame())).toBe(false)
+    expect(lastFrame()).toContain('Current: dashboard')
+
+    await clickCell(stdin, explicitHit)
+    expect(lastFrame()).toContain('Current: plan')
+  }))
+
+  it('automatically hit-tests sidebar rows and keeps keyboard focus there', async () => withColorOutput(async () => {
     function CurrentScreen() {
       const { currentScreenId } = useNavigation()
       return <Text>Current: {currentScreenId}</Text>
@@ -276,11 +334,26 @@ describe('Sidebar', () => {
     )
 
     await delay(120)
-    await clickCell(stdin, cellInFrame(lastFrame(), 'Plan'))
+    const dashboard = cellInFrame(lastFrame(), 'Dashboard')
+    await hoverCell(stdin, dashboard)
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(lastFrame()).toContain('Current: dashboard')
+    expect(lastFrame()).toContain('› Dashboard')
+
+    const plan = cellInFrame(lastFrame(), 'Plan')
+    await hoverCell(stdin, plan)
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(lastFrame()).toContain('Current: dashboard')
+
+    await hoverCell(stdin, { x: plan.x, y: plan.y + 3 })
+    expect(isUnderlined(lastFrame())).toBe(false)
+    expect(lastFrame()).toContain('Current: dashboard')
+
+    await clickCell(stdin, plan)
 
     expect(lastFrame()).toContain('Current: plan')
     expect(lastFrame()).toContain('› Plan')
-  })
+  }))
 
   it('composes automatic footer targets through the measured sidebar path', async () => {
     const onActivate = vi.fn()

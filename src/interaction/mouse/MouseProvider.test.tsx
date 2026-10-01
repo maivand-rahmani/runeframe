@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { render as inkRender, Text } from 'ink'
 import { render } from 'ink-testing-library'
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import {
+  Activity,
+  StrictMode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+} from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import {
   KeyboardScopeProvider,
@@ -19,7 +25,12 @@ import {
   type MouseWheelDirection,
   type MouseWheelRegistration,
 } from './MouseProvider.js'
-import { MouseArea, type MouseBounds, type MouseClickEvent } from './MouseArea.js'
+import {
+  MouseArea,
+  type MouseAreaProps,
+  type MouseBounds,
+  type MouseClickEvent,
+} from './MouseArea.js'
 import { useKeyHandler } from '../keyboard/useKeyHandler.js'
 import { FocusTreeProvider } from '../focus/FocusTreeProvider.js'
 import { useInputFocus } from '../focus/useInputFocus.js'
@@ -28,7 +39,7 @@ import {
   useNavigation,
 } from '../../navigation/NavigationProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
-import type { NormalizedKeyEvent } from '../../types.js'
+import type { FocusScope, NormalizedKeyEvent } from '../../types.js'
 import type { MouseEventSource } from './MouseEventSource.js'
 import type { NormalizedMouseEvent } from './SgrMouseStreamParser.js'
 
@@ -90,6 +101,17 @@ async function release(stdin: WritableStdin, cx: number, cy: number) {
 async function click(stdin: WritableStdin, cx: number, cy: number) {
   await press(stdin, cx, cy)
   await release(stdin, cx, cy)
+}
+
+/** Post-Ink SGR motion report: `Cb` 32 = left held, 35 = no button. */
+async function move(
+  stdin: WritableStdin,
+  button: 'left' | 'none',
+  cx: number,
+  cy: number,
+) {
+  stdin.write(`\u001B[<${button === 'left' ? 32 : 35};${cx};${cy}M`)
+  await delay()
 }
 
 const BOUNDS = { x: 1, y: 0, width: 3, height: 2 }
@@ -1143,6 +1165,63 @@ function sourceWheelEvent(
 }
 
 /**
+ * Zero-based motion event for a fake source: left held (`'left'`) or no button
+ * (`'none'`), matching the normalized stream-parser union.
+ */
+function sourceMoveEvent(
+  button: 'left' | 'none',
+  x: number,
+  y: number,
+): NormalizedMouseEvent {
+  return {
+    type: 'move',
+    button,
+    x,
+    y,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  }
+}
+
+/**
+ * Minimal area probe exposing the full click/hover/drag surface so pointer
+ * routing can be asserted without a measured layout.
+ */
+function MouseProbe({
+  bounds,
+  disabled = false,
+  priority = 0,
+  scope,
+  ...handlers
+}: {
+  bounds: MouseBounds
+  disabled?: boolean
+  priority?: number
+  scope?: FocusScope
+} & Pick<
+  MouseAreaProps,
+  | 'onClick'
+  | 'onEnter'
+  | 'onLeave'
+  | 'onMove'
+  | 'onDragStart'
+  | 'onDragMove'
+  | 'onDragEnd'
+  | 'onDragCancel'
+>) {
+  return (
+    <MouseArea
+      bounds={bounds}
+      disabled={disabled}
+      priority={priority}
+      scope={scope}
+      {...handlers}
+    />
+  )
+}
+
+/**
  * Wheel-only registration probe: mirrors `MouseScrollLayout`'s registration
  * shape (stable explicit id, record mutated in place) without requiring a
  * measured layout, so wheel routing can be exercised directly from a source.
@@ -1231,7 +1310,7 @@ describe('MouseProvider TTY lifecycle', () => {
     ).toBe(1)
   })
 
-  it('keeps the 1000/1006 mode lifecycle when an event source is configured', async () => {
+  it('keeps the 1003/1006 mode lifecycle when an event source is configured', async () => {
     const source = fakeMouseEventSource()
     const { instance, stdout } = renderWithStreams(
       harness(
@@ -2083,5 +2162,1310 @@ describe('MouseProvider diagnostics (opt-in)', () => {
   it('caps per-event area snapshots', () => {
     expect(MAX_DIAGNOSTIC_AREA_SNAPSHOTS).toBeGreaterThan(0)
     expect(MAX_DIAGNOSTIC_AREA_SNAPSHOTS).toBeLessThanOrEqual(32)
+  })
+})
+
+// ── Hover, drag and pointer motion ─────────────────────────────────────
+
+describe('MouseProvider hover routing', () => {
+  const AREA_A = { x: 0, y: 0, width: 3, height: 3 }
+  const AREA_B = { x: 5, y: 0, width: 3, height: 3 }
+
+  function hoverProbe(
+    bounds: MouseBounds,
+    options: { disabled?: boolean; priority?: number } = {},
+  ) {
+    const enter = vi.fn()
+    const leave = vi.fn()
+    const move = vi.fn()
+    const element = (
+      <MouseProbe
+        bounds={bounds}
+        disabled={options.disabled ?? false}
+        priority={options.priority ?? 0}
+        onEnter={enter}
+        onLeave={leave}
+        onMove={move}
+      />
+    )
+    return { enter, leave, move, element }
+  }
+
+  it('enters, moves and leaves the topmost target via post-Ink motion', async () => {
+    const a = hoverProbe(AREA_A)
+    const b = hoverProbe(AREA_B)
+    const { stdin } = render(
+      harness(
+        <>
+          {a.element}
+          {b.element}
+        </>,
+      ),
+    )
+
+    await move(stdin, 'none', 1, 1) // (0, 0) — inside A
+    expect(a.enter).toHaveBeenCalledTimes(1)
+    expect(a.enter).toHaveBeenCalledWith({ x: 0, y: 0 })
+    expect(a.move).toHaveBeenCalledTimes(1)
+    expect(a.leave).not.toHaveBeenCalled()
+
+    await move(stdin, 'none', 2, 2) // (1, 1) — still inside A
+    expect(a.enter).toHaveBeenCalledTimes(1)
+    expect(a.move).toHaveBeenCalledTimes(2)
+    expect(a.move).toHaveBeenLastCalledWith({ x: 1, y: 1 })
+
+    await move(stdin, 'none', 6, 1) // (5, 0) — inside B
+    expect(a.leave).toHaveBeenCalledTimes(1)
+    expect(a.leave).toHaveBeenCalledWith({ x: 5, y: 0 })
+    expect(b.enter).toHaveBeenCalledTimes(1)
+    expect(b.enter).toHaveBeenCalledWith({ x: 5, y: 0 })
+    expect(b.move).toHaveBeenCalledTimes(1)
+
+    await move(stdin, 'none', 50, 50) // outside every area
+    expect(b.leave).toHaveBeenCalledTimes(1)
+    expect(b.leave).toHaveBeenCalledWith({ x: 49, y: 49 })
+    expect(b.move).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes the same hover transitions from the external source', () => {
+    const source = fakeMouseEventSource()
+    const a = hoverProbe(AREA_A)
+    render(harness(a.element, undefined, undefined, source.source))
+
+    source.emit(sourceMoveEvent('none', 0, 0))
+    expect(a.enter).toHaveBeenCalledTimes(1)
+    expect(a.enter).toHaveBeenCalledWith({ x: 0, y: 0 })
+    expect(a.move).toHaveBeenCalledTimes(1)
+
+    source.emit(sourceMoveEvent('none', 1, 0))
+    expect(a.enter).toHaveBeenCalledTimes(1)
+    expect(a.move).toHaveBeenCalledTimes(2)
+
+    source.emit(sourceMoveEvent('none', 40, 40))
+    expect(a.leave).toHaveBeenCalledTimes(1)
+    expect(a.move).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets a disabled topmost target consume motion without passing through', async () => {
+    const back = hoverProbe(AREA_A)
+    const top = hoverProbe(AREA_A, { disabled: true, priority: 5 })
+    const { stdin } = render(
+      harness(
+        <>
+          {back.element}
+          {top.element}
+        </>,
+      ),
+    )
+
+    await move(stdin, 'none', 1, 1)
+    expect(back.enter).not.toHaveBeenCalled()
+    expect(back.move).not.toHaveBeenCalled()
+    expect(top.enter).not.toHaveBeenCalled()
+    expect(top.move).not.toHaveBeenCalled()
+  })
+
+  it('leaves an enabled target when motion moves onto a disabled overlay', async () => {
+    const enabled = hoverProbe(AREA_A)
+    const disabled = hoverProbe(AREA_B, { disabled: true })
+    const { stdin } = render(
+      harness(
+        <>
+          {enabled.element}
+          {disabled.element}
+        </>,
+      ),
+    )
+
+    await move(stdin, 'none', 1, 1)
+    expect(enabled.enter).toHaveBeenCalledTimes(1)
+
+    await move(stdin, 'none', 6, 1)
+    expect(enabled.leave).toHaveBeenCalledTimes(1)
+    expect(disabled.enter).not.toHaveBeenCalled()
+    expect(disabled.move).not.toHaveBeenCalled()
+  })
+
+  it('updates hover on a left-held motion even without a captured press', async () => {
+    const a = hoverProbe(AREA_A)
+    const { stdin } = render(harness(a.element))
+
+    await move(stdin, 'left', 1, 1)
+    expect(a.enter).toHaveBeenCalledTimes(1)
+    expect(a.move).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MouseProvider committed hover reconciliation', () => {
+  const AREA_A = { x: 0, y: 0, width: 3, height: 3 }
+  const AREA_B = { x: 5, y: 0, width: 3, height: 3 }
+
+  it('re-resolves hover after a committed bounds move without any motion', async () => {
+    const enterA = vi.fn()
+    const leaveA = vi.fn()
+    const moveA = vi.fn()
+    const clickA = vi.fn()
+    const enterB = vi.fn()
+    const leaveB = vi.fn()
+    const moveB = vi.fn()
+    const clickB = vi.fn()
+    let moved = false
+
+    function Host() {
+      return (
+        <>
+          <MouseProbe
+            bounds={moved ? { x: 20, y: 20, width: 3, height: 3 } : AREA_A}
+            onClick={clickA}
+            onEnter={enterA}
+            onLeave={leaveA}
+            onMove={moveA}
+          />
+          <MouseProbe
+            bounds={moved ? AREA_A : AREA_B}
+            onClick={clickB}
+            onEnter={enterB}
+            onLeave={leaveB}
+            onMove={moveB}
+          />
+        </>
+      )
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+    await move(stdin, 'none', 1, 1) // (0, 0) — inside A
+    expect(enterA).toHaveBeenCalledTimes(1)
+    expect(moveA).toHaveBeenCalledTimes(1)
+
+    // A moves away and B lands under the stationary pointer in one commit.
+    moved = true
+    rerender(harness(<Host />))
+    await delay()
+
+    // Exactly one identity transition each, at the last reported cell; the
+    // committed re-check is never a synthetic motion or activation.
+    expect(leaveA).toHaveBeenCalledTimes(1)
+    expect(leaveA).toHaveBeenCalledWith({ x: 0, y: 0 })
+    expect(enterB).toHaveBeenCalledTimes(1)
+    expect(enterB).toHaveBeenCalledWith({ x: 0, y: 0 })
+    expect(moveA).toHaveBeenCalledTimes(1)
+    expect(moveB).not.toHaveBeenCalled()
+    expect(leaveB).not.toHaveBeenCalled()
+    expect(clickA).not.toHaveBeenCalled()
+    expect(clickB).not.toHaveBeenCalled()
+
+    // Normal motion and click routing still work from the new cells.
+    await click(stdin, 1, 1)
+    expect(clickB).toHaveBeenCalledTimes(1)
+    expect(clickA).not.toHaveBeenCalled()
+  })
+
+  it('moves hover to a prepended row that shifts the previous target down', async () => {
+    const enterToast = vi.fn()
+    const enterA = vi.fn()
+    const leaveA = vi.fn()
+    const enterB = vi.fn()
+    const leaveB = vi.fn()
+    let toast = false
+
+    function Host() {
+      return (
+        <>
+          {toast ? (
+            <MouseProbe
+              key="toast"
+              bounds={{ x: 0, y: 0, width: 6, height: 1 }}
+              onEnter={enterToast}
+            />
+          ) : null}
+          <MouseProbe
+            key="a"
+            bounds={{ x: 0, y: toast ? 1 : 0, width: 6, height: 1 }}
+            onEnter={enterA}
+            onLeave={leaveA}
+          />
+          <MouseProbe
+            key="b"
+            bounds={{ x: 0, y: toast ? 2 : 1, width: 6, height: 1 }}
+            onEnter={enterB}
+            onLeave={leaveB}
+          />
+        </>
+      )
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+    await move(stdin, 'none', 1, 2) // (0, 1) — inside B
+    expect(enterB).toHaveBeenCalledTimes(1)
+
+    // The prepended row shifts A onto the pointer cell and B further down.
+    toast = true
+    rerender(harness(<Host />))
+    await delay()
+
+    expect(leaveB).toHaveBeenCalledTimes(1)
+    expect(leaveB).toHaveBeenCalledWith({ x: 0, y: 1 })
+    expect(enterA).toHaveBeenCalledTimes(1)
+    expect(enterA).toHaveBeenCalledWith({ x: 0, y: 1 })
+    expect(enterToast).not.toHaveBeenCalled()
+  })
+
+  it('drops a departed hover silently and enters the replacement once', async () => {
+    const enterOld = vi.fn()
+    const leaveOld = vi.fn()
+    const enterNew = vi.fn()
+    const leaveNew = vi.fn()
+    let replacement = false
+
+    function Host() {
+      return replacement ? (
+        <MouseProbe
+          key="new"
+          bounds={AREA_A}
+          onEnter={enterNew}
+          onLeave={leaveNew}
+        />
+      ) : (
+        <MouseProbe
+          key="old"
+          bounds={AREA_A}
+          onEnter={enterOld}
+          onLeave={leaveOld}
+        />
+      )
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+    await move(stdin, 'none', 1, 1)
+    expect(enterOld).toHaveBeenCalledTimes(1)
+
+    replacement = true
+    rerender(harness(<Host />))
+    await delay()
+
+    // The torn-down record is never called back; the surviving replacement
+    // under the stationary pointer is entered exactly once.
+    expect(leaveOld).not.toHaveBeenCalled()
+    expect(enterNew).toHaveBeenCalledTimes(1)
+    expect(enterNew).toHaveBeenCalledWith({ x: 0, y: 0 })
+    expect(leaveNew).not.toHaveBeenCalled()
+  })
+
+  it('leaves hover when a committed disabled overlay takes the point', async () => {
+    const enterA = vi.fn()
+    const leaveA = vi.fn()
+    const enterOverlay = vi.fn()
+    let overlay = false
+
+    function Host() {
+      return (
+        <>
+          <MouseProbe
+            bounds={AREA_A}
+            onEnter={enterA}
+            onLeave={leaveA}
+          />
+          {overlay ? (
+            <MouseProbe
+              bounds={AREA_A}
+              disabled
+              priority={5}
+              onEnter={enterOverlay}
+            />
+          ) : null}
+        </>
+      )
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+    await move(stdin, 'none', 1, 1)
+    expect(enterA).toHaveBeenCalledTimes(1)
+
+    overlay = true
+    rerender(harness(<Host />))
+    await delay()
+    // The disabled topmost target consumes: the previous target leaves and
+    // nothing underneath (or on top) is entered.
+    expect(leaveA).toHaveBeenCalledTimes(1)
+    expect(enterOverlay).not.toHaveBeenCalled()
+
+    overlay = false
+    rerender(harness(<Host />))
+    await delay()
+    // Removing the consumer reveals the enabled target underneath.
+    expect(enterA).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears the hover of the topmost target that becomes disabled without pass-through', async () => {
+    const enterA = vi.fn()
+    const leaveA = vi.fn()
+    const enterB = vi.fn()
+    let disabled = false
+
+    function Host() {
+      return (
+        <>
+          <MouseProbe
+            bounds={AREA_A}
+            disabled={disabled}
+            priority={5}
+            onEnter={enterA}
+            onLeave={leaveA}
+          />
+          <MouseProbe bounds={AREA_A} priority={0} onEnter={enterB} />
+        </>
+      )
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+    await move(stdin, 'none', 1, 1)
+    expect(enterA).toHaveBeenCalledTimes(1)
+
+    disabled = true
+    rerender(harness(<Host />))
+    await delay()
+
+    // The hovered topmost target itself became disabled: it leaves and the
+    // enabled area underneath is never entered.
+    expect(leaveA).toHaveBeenCalledTimes(1)
+    expect(leaveA).toHaveBeenCalledWith({ x: 0, y: 0 })
+    expect(enterB).not.toHaveBeenCalled()
+
+    // Motion confirms the same consumption without committed changes.
+    await move(stdin, 'none', 2, 2)
+    expect(enterB).not.toHaveBeenCalled()
+  })
+
+  it('re-resolves hover when the modal stack changes without motion', async () => {
+    const enterA = vi.fn()
+    const leaveA = vi.fn()
+    let navigation: ReturnType<typeof useNavigation> | null = null
+
+    function Capture() {
+      navigation = useNavigation()
+      return null
+    }
+
+    const { stdin } = render(
+      harness(
+        <>
+          <Capture />
+          <MouseProbe bounds={AREA_A} onEnter={enterA} onLeave={leaveA} />
+        </>,
+      ),
+    )
+
+    await move(stdin, 'none', 1, 1)
+    expect(enterA).toHaveBeenCalledTimes(1)
+
+    navigation!.pushModal('modal-screen')
+    await delay()
+    // The background area became modal-ineligible: hover left without motion.
+    expect(leaveA).toHaveBeenCalledTimes(1)
+    expect(leaveA).toHaveBeenCalledWith({ x: 0, y: 0 })
+
+    navigation!.popModal()
+    await delay()
+    // Eligible again under the same stationary pointer.
+    expect(enterA).toHaveBeenCalledTimes(2)
+    expect(leaveA).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-resolves on a committed scope change but awaits motion for scope-stack changes', async () => {
+    const enter = vi.fn()
+    const leave = vi.fn()
+    let scoped = false
+    let keyboard: ReturnType<typeof useKeyboardScope> | null = null
+
+    function Capture() {
+      keyboard = useKeyboardScope()
+      return null
+    }
+
+    function Host() {
+      return (
+        <MouseProbe
+          bounds={AREA_A}
+          scope={scoped ? 'list' : undefined}
+          onEnter={enter}
+          onLeave={leave}
+        />
+      )
+    }
+
+    const { stdin, rerender } = render(
+      harness(
+        <>
+          <Capture />
+          <Host />
+        </>,
+      ),
+    )
+
+    await move(stdin, 'none', 1, 1)
+    expect(enter).toHaveBeenCalledTimes(1)
+
+    scoped = true
+    rerender(
+      harness(
+        <>
+          <Capture />
+          <Host />
+        </>,
+      ),
+    )
+    await delay()
+    // The committed scope field change made the area ineligible.
+    expect(leave).toHaveBeenCalledTimes(1)
+
+    keyboard!.pushScope('list')
+    await delay()
+    // Active scope-stack changes without an area commit wait for motion...
+    expect(enter).toHaveBeenCalledTimes(1)
+    await move(stdin, 'none', 2, 2)
+    // ...and the next motion resolves them.
+    expect(enter).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-resolves when a committed priority change flips the topmost target', async () => {
+    const enterA = vi.fn()
+    const leaveA = vi.fn()
+    const enterB = vi.fn()
+    const leaveB = vi.fn()
+    let boost = false
+
+    function Host() {
+      return (
+        <>
+          <MouseProbe
+            bounds={AREA_A}
+            priority={boost ? 5 : 0}
+            onEnter={enterA}
+            onLeave={leaveA}
+          />
+          <MouseProbe
+            bounds={AREA_A}
+            priority={0}
+            onEnter={enterB}
+            onLeave={leaveB}
+          />
+        </>
+      )
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+    await move(stdin, 'none', 1, 1)
+    // Same priority and bounds: the later registration wins the tie.
+    expect(enterB).toHaveBeenCalledTimes(1)
+    expect(enterA).not.toHaveBeenCalled()
+
+    boost = true
+    rerender(harness(<Host />))
+    await delay()
+    expect(leaveB).toHaveBeenCalledTimes(1)
+    expect(enterA).toHaveBeenCalledTimes(1)
+    expect(leaveA).not.toHaveBeenCalled()
+  })
+
+  it('does no committed work without a known pointer', async () => {
+    const enter = vi.fn()
+    const leave = vi.fn()
+    const onClick = vi.fn()
+    let moved = false
+
+    function Host() {
+      return (
+        <MouseProbe
+          bounds={moved ? { x: 4, y: 4, width: 2, height: 2 } : AREA_A}
+          onClick={onClick}
+          onEnter={enter}
+          onLeave={leave}
+        />
+      )
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+    moved = true
+    rerender(harness(<Host />))
+    await delay()
+
+    // No motion ever reported a pointer: committed changes never invent one.
+    expect(enter).not.toHaveBeenCalled()
+    expect(leave).not.toHaveBeenCalled()
+
+    // Click routing follows the committed bounds, still with no hover.
+    await click(stdin, 1, 1) // old cell, now empty
+    expect(onClick).not.toHaveBeenCalled()
+    await click(stdin, 5, 5)
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(enter).not.toHaveBeenCalled()
+  })
+
+  it('re-resolves committed changes identically from the external source', async () => {
+    const source = fakeMouseEventSource()
+    const enterA = vi.fn()
+    const leaveA = vi.fn()
+    const enterB = vi.fn()
+    let moved = false
+
+    function Host() {
+      return (
+        <>
+          <MouseProbe
+            bounds={moved ? { x: 20, y: 20, width: 3, height: 3 } : AREA_A}
+            onEnter={enterA}
+            onLeave={leaveA}
+          />
+          <MouseProbe
+            bounds={moved ? AREA_A : AREA_B}
+            onEnter={enterB}
+          />
+        </>
+      )
+    }
+
+    const { rerender } = render(
+      harness(<Host />, undefined, undefined, source.source),
+    )
+    source.emit(sourceMoveEvent('none', 0, 0))
+    expect(enterA).toHaveBeenCalledTimes(1)
+
+    moved = true
+    rerender(harness(<Host />, undefined, undefined, source.source))
+    await delay()
+
+    expect(leaveA).toHaveBeenCalledTimes(1)
+    expect(enterB).toHaveBeenCalledTimes(1)
+    expect(enterB).toHaveBeenCalledWith({ x: 0, y: 0 })
+  })
+
+  it('does not replay a stale pointer across a source swap', async () => {
+    const first = fakeMouseEventSource()
+    const second = fakeMouseEventSource()
+    const enter = vi.fn()
+    const leave = vi.fn()
+    let moved = false
+
+    function Host() {
+      return (
+        <MouseProbe
+          bounds={moved ? { x: 10, y: 10, width: 3, height: 3 } : AREA_A}
+          onEnter={enter}
+          onLeave={leave}
+        />
+      )
+    }
+
+    const { rerender } = render(
+      harness(<Host />, undefined, undefined, first.source),
+    )
+    first.emit(sourceMoveEvent('none', 0, 0))
+    expect(enter).toHaveBeenCalledTimes(1)
+
+    // Bounds change and channel swap commit together: the old channel's
+    // pointer and hover must be dropped without a cross-channel transition.
+    moved = true
+    rerender(harness(<Host />, undefined, undefined, second.source))
+    await delay()
+    expect(leave).not.toHaveBeenCalled()
+    expect(enter).toHaveBeenCalledTimes(1)
+
+    // The new channel re-establishes hover from its own motion only.
+    second.emit(sourceMoveEvent('none', 10, 10))
+    expect(enter).toHaveBeenCalledTimes(2)
+    expect(leave).not.toHaveBeenCalled()
+  })
+
+  it('never dispatches a queued committed re-check after provider teardown', async () => {
+    const enter = vi.fn()
+    const leave = vi.fn()
+    let moved = false
+
+    function Host() {
+      return (
+        <MouseProbe
+          bounds={moved ? { x: 9, y: 9, width: 3, height: 3 } : AREA_A}
+          onEnter={enter}
+          onLeave={leave}
+        />
+      )
+    }
+
+    const { stdin, rerender, unmount } = render(harness(<Host />))
+    await move(stdin, 'none', 1, 1)
+    expect(enter).toHaveBeenCalledTimes(1)
+
+    moved = true
+    rerender(harness(<Host />))
+    // Tear down before the queued microtask gets a chance to run.
+    unmount()
+    await delay()
+
+    expect(leave).not.toHaveBeenCalled()
+    expect(enter).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MouseProvider committed hover reconciliation across an effect replay', () => {
+  const AREA_A = { x: 0, y: 0, width: 3, height: 3 }
+  const AREA_B = { x: 5, y: 0, width: 3, height: 3 }
+
+  it('keeps committed re-hit-testing alive across a StrictMode-style replay', async () => {
+    const enterA = vi.fn()
+    const leaveA = vi.fn()
+    const enterB = vi.fn()
+    let visible = true
+    let moved = false
+    let guardSetups = 0
+    let guardCleanups = 0
+
+    function ReplayProbe() {
+      useLayoutEffect(() => {
+        guardSetups += 1
+        return () => {
+          guardCleanups += 1
+        }
+      }, [])
+      return null
+    }
+
+    function Host() {
+      return (
+        <>
+          <MouseProbe
+            bounds={moved ? { x: 20, y: 20, width: 3, height: 3 } : AREA_A}
+            onEnter={enterA}
+            onLeave={leaveA}
+          />
+          <MouseProbe bounds={moved ? AREA_A : AREA_B} onEnter={enterB} />
+        </>
+      )
+    }
+
+    function Tree() {
+      return (
+        <StrictMode>
+          <Activity mode={visible ? 'visible' : 'hidden'}>
+            {harness(
+              <>
+                <ReplayProbe />
+                <Host />
+              </>,
+            )}
+          </Activity>
+        </StrictMode>
+      )
+    }
+
+    const { stdin, rerender } = render(<Tree />)
+    await delay()
+
+    // Reproduce the StrictMode mount replay ordering (setup → cleanup →
+    // setup) deterministically: hiding an Activity unmounts layout effects
+    // and showing it runs their setups again while refs stay preserved.
+    // Ink creates its root with `isStrictMode = false`, so React never
+    // replays effects here by itself; Activity is the only way to pin the
+    // provider guard against a cleanup that is not followed by a setup.
+    visible = false
+    rerender(<Tree />)
+    await delay()
+    visible = true
+    rerender(<Tree />)
+    await delay()
+    expect(guardCleanups).toBeGreaterThanOrEqual(1)
+    expect(guardSetups).toBeGreaterThanOrEqual(2)
+
+    // After the replay, motion and committed re-resolution still work: a
+    // live guard is required for the bounds move below to dispatch at all.
+    await move(stdin, 'none', 1, 1)
+    expect(enterA).toHaveBeenCalledTimes(1)
+
+    moved = true
+    rerender(<Tree />)
+    await delay()
+    expect(leaveA).toHaveBeenCalledTimes(1)
+    expect(leaveA).toHaveBeenCalledWith({ x: 0, y: 0 })
+    expect(enterB).toHaveBeenCalledTimes(1)
+    expect(enterB).toHaveBeenCalledWith({ x: 0, y: 0 })
+  })
+})
+
+describe('MouseProvider drag capture', () => {
+  const AREA = { x: 0, y: 0, width: 2, height: 2 }
+
+  it('captures the press target and dispatches start/move/end outside bounds', async () => {
+    const onClick = vi.fn()
+    const start = vi.fn()
+    const dragMove = vi.fn()
+    const end = vi.fn()
+    const cancel = vi.fn()
+    const { stdin } = render(
+      harness(
+        <MouseProbe
+          bounds={AREA}
+          onClick={onClick}
+          onDragStart={start}
+          onDragMove={dragMove}
+          onDragEnd={end}
+          onDragCancel={cancel}
+        />,
+      ),
+    )
+
+    await press(stdin, 1, 1) // (0, 0)
+    await move(stdin, 'left', 2, 2) // (1, 1)
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledWith({ x: 1, y: 1, startX: 0, startY: 0 })
+    expect(dragMove).toHaveBeenCalledTimes(1)
+    expect(dragMove).toHaveBeenCalledWith({ x: 1, y: 1, startX: 0, startY: 0 })
+    expect(cancel).not.toHaveBeenCalled()
+
+    // A repeated cell after the start still reports motion (never dropped).
+    await move(stdin, 'left', 2, 2)
+    expect(dragMove).toHaveBeenCalledTimes(2)
+
+    await move(stdin, 'left', 9, 9) // (8, 8) — outside the captured bounds
+    expect(dragMove).toHaveBeenCalledTimes(3)
+    expect(dragMove).toHaveBeenLastCalledWith({
+      x: 8,
+      y: 8,
+      startX: 0,
+      startY: 0,
+    })
+
+    await release(stdin, 9, 9)
+    expect(end).toHaveBeenCalledTimes(1)
+    expect(end).toHaveBeenCalledWith({ x: 8, y: 8, startX: 0, startY: 0 })
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('captures and dispatches drags from the external source', () => {
+    const source = fakeMouseEventSource()
+    const onClick = vi.fn()
+    const start = vi.fn()
+    const dragMove = vi.fn()
+    const end = vi.fn()
+    render(
+      harness(
+        <MouseProbe
+          bounds={AREA}
+          onClick={onClick}
+          onDragStart={start}
+          onDragMove={dragMove}
+          onDragEnd={end}
+        />,
+        undefined,
+        undefined,
+        source.source,
+      ),
+    )
+
+    source.emit(sourceButtonEvent('press', 0, 0))
+    source.emit(sourceMoveEvent('left', 1, 1))
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledWith({ x: 1, y: 1, startX: 0, startY: 0 })
+    expect(dragMove).toHaveBeenCalledTimes(1)
+
+    source.emit(sourceMoveEvent('left', 30, 30))
+    source.emit(sourceButtonEvent('release', 30, 30))
+    expect(dragMove).toHaveBeenLastCalledWith({
+      x: 30,
+      y: 30,
+      startX: 0,
+      startY: 0,
+    })
+    expect(end).toHaveBeenCalledWith({ x: 30, y: 30, startX: 0, startY: 0 })
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('suppresses the click after a drag even inside the pressed area', async () => {
+    const onClick = vi.fn()
+    const end = vi.fn()
+    const { stdin } = render(
+      harness(<MouseProbe bounds={AREA} onClick={onClick} onDragEnd={end} />),
+    )
+
+    await press(stdin, 1, 1)
+    await move(stdin, 'left', 2, 1) // (1, 0) — still inside AREA
+    await release(stdin, 2, 1)
+    expect(end).toHaveBeenCalledTimes(1)
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('keeps the click when the button never leaves the press cell', async () => {
+    const onClick = vi.fn()
+    const start = vi.fn()
+    const end = vi.fn()
+    const { stdin } = render(
+      harness(
+        <MouseProbe
+          bounds={AREA}
+          onClick={onClick}
+          onDragStart={start}
+          onDragEnd={end}
+        />,
+      ),
+    )
+
+    await press(stdin, 1, 1)
+    await move(stdin, 'left', 1, 1) // same cell — zero threshold not crossed
+    await release(stdin, 1, 1)
+    expect(start).not.toHaveBeenCalled()
+    expect(end).not.toHaveBeenCalled()
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(onClick).toHaveBeenCalledWith({ x: 0, y: 0 })
+  })
+
+  it('does not capture a disabled press target', async () => {
+    const onClick = vi.fn()
+    const start = vi.fn()
+    const dragMove = vi.fn()
+    const end = vi.fn()
+    const { stdin } = render(
+      harness(
+        <MouseProbe
+          bounds={AREA}
+          disabled
+          onClick={onClick}
+          onDragStart={start}
+          onDragMove={dragMove}
+          onDragEnd={end}
+        />,
+      ),
+    )
+
+    await press(stdin, 1, 1)
+    await move(stdin, 'left', 2, 2)
+    await release(stdin, 2, 2)
+    expect(start).not.toHaveBeenCalled()
+    expect(dragMove).not.toHaveBeenCalled()
+    expect(end).not.toHaveBeenCalled()
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('cancels the capture when the target becomes disabled', async () => {
+    const onClick = vi.fn()
+    const start = vi.fn()
+    const dragMove = vi.fn()
+    const end = vi.fn()
+    const cancel = vi.fn()
+    let disabled = false
+
+    function Host() {
+      return (
+        <MouseProbe
+          bounds={AREA}
+          disabled={disabled}
+          onClick={onClick}
+          onDragStart={start}
+          onDragMove={dragMove}
+          onDragEnd={end}
+          onDragCancel={cancel}
+        />
+      )
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+
+    await press(stdin, 1, 1)
+    await move(stdin, 'left', 2, 2)
+    expect(start).toHaveBeenCalledTimes(1)
+
+    disabled = true
+    rerender(harness(<Host />))
+    await delay()
+    await move(stdin, 'left', 3, 3)
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    // Cancellation reports the last cell seen while the capture was valid.
+    expect(cancel).toHaveBeenCalledWith({ x: 1, y: 1, startX: 0, startY: 0 })
+    expect(dragMove).toHaveBeenCalledTimes(1)
+
+    await release(stdin, 3, 3)
+    expect(end).not.toHaveBeenCalled()
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('cancels the capture when the modal stack changes', async () => {
+    const onClick = vi.fn()
+    const start = vi.fn()
+    const end = vi.fn()
+    const cancel = vi.fn()
+    let navigation: ReturnType<typeof useNavigation> | null = null
+
+    function Capture() {
+      navigation = useNavigation()
+      return null
+    }
+
+    const { stdin } = render(
+      harness(
+        <>
+          <Capture />
+          <MouseProbe
+            bounds={AREA}
+            onClick={onClick}
+            onDragStart={start}
+            onDragEnd={end}
+            onDragCancel={cancel}
+          />
+        </>,
+      ),
+    )
+
+    // Cancellation discovered by a motion while the modal is open.
+    await press(stdin, 1, 1)
+    await move(stdin, 'left', 2, 2)
+    expect(start).toHaveBeenCalledTimes(1)
+    navigation!.pushModal('modal-screen')
+    await delay()
+    await move(stdin, 'left', 3, 3)
+    expect(cancel).toHaveBeenCalledTimes(1)
+
+    await release(stdin, 3, 3)
+    expect(end).not.toHaveBeenCalled()
+    expect(onClick).not.toHaveBeenCalled()
+
+    // Cancellation discovered by the release itself.
+    navigation!.popModal()
+    await delay()
+    await press(stdin, 1, 1)
+    await move(stdin, 'left', 2, 2)
+    navigation!.pushModal('modal-screen')
+    await delay()
+    await release(stdin, 2, 2)
+    expect(cancel).toHaveBeenCalledTimes(2)
+    expect(end).not.toHaveBeenCalled()
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('drops the capture silently when the target unregisters', async () => {
+    const onClick = vi.fn()
+    const start = vi.fn()
+    const end = vi.fn()
+    const cancel = vi.fn()
+    let mounted = true
+
+    function Host() {
+      return mounted ? (
+        <MouseProbe
+          bounds={AREA}
+          onClick={onClick}
+          onDragStart={start}
+          onDragEnd={end}
+          onDragCancel={cancel}
+        />
+      ) : null
+    }
+
+    const { stdin, rerender } = render(harness(<Host />))
+
+    await press(stdin, 1, 1)
+    await move(stdin, 'left', 2, 2)
+    expect(start).toHaveBeenCalledTimes(1)
+
+    mounted = false
+    rerender(harness(<Host />))
+    await delay()
+    await release(stdin, 2, 2)
+
+    // Torn-down callbacks are never invoked, and the stale release is inert.
+    expect(cancel).not.toHaveBeenCalled()
+    expect(end).not.toHaveBeenCalled()
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('cancels the capture on a source swap and keeps the stale release inert', async () => {
+    const first = fakeMouseEventSource()
+    const second = fakeMouseEventSource()
+    const onClick = vi.fn()
+    const start = vi.fn()
+    const end = vi.fn()
+    const cancel = vi.fn()
+    const area = (
+      <MouseProbe
+        bounds={AREA}
+        onClick={onClick}
+        onDragStart={start}
+        onDragEnd={end}
+        onDragCancel={cancel}
+      />
+    )
+
+    const { rerender } = render(
+      harness(area, undefined, undefined, first.source),
+    )
+    first.emit(sourceButtonEvent('press', 0, 0))
+    first.emit(sourceMoveEvent('left', 1, 1))
+    expect(start).toHaveBeenCalledTimes(1)
+
+    rerender(harness(area, undefined, undefined, second.source))
+    await delay()
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel).toHaveBeenCalledWith({ x: 1, y: 1, startX: 0, startY: 0 })
+
+    second.emit(sourceButtonEvent('release', 1, 1))
+    expect(end).not.toHaveBeenCalled()
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('does not click when the source swaps between press and release', async () => {
+    const first = fakeMouseEventSource()
+    const second = fakeMouseEventSource()
+    const onClick = vi.fn()
+    const area = <MouseProbe bounds={AREA} onClick={onClick} />
+
+    const { rerender } = render(
+      harness(area, undefined, undefined, first.source),
+    )
+
+    // Press on A, swap channels before any motion, release the same cell on B:
+    // the old channel's pending press must be gone, not clickable.
+    first.emit(sourceButtonEvent('press', 0, 0))
+    rerender(harness(area, undefined, undefined, second.source))
+    await delay()
+    second.emit(sourceButtonEvent('release', 0, 0))
+    expect(onClick).not.toHaveBeenCalled()
+
+    // The new channel still owns a fresh, complete gesture.
+    second.emit(sourceButtonEvent('press', 0, 0))
+    second.emit(sourceButtonEvent('release', 0, 0))
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(onClick).toHaveBeenCalledWith({ x: 0, y: 0 })
+  })
+
+  it('resets hover on a source swap and re-establishes it from the new channel', async () => {
+    const first = fakeMouseEventSource()
+    const second = fakeMouseEventSource()
+    const enter = vi.fn()
+    const leave = vi.fn()
+    const move = vi.fn()
+    const area = (
+      <MouseProbe
+        bounds={AREA}
+        onEnter={enter}
+        onLeave={leave}
+        onMove={move}
+      />
+    )
+
+    const { rerender } = render(
+      harness(area, undefined, undefined, first.source),
+    )
+    first.emit(sourceMoveEvent('none', 0, 0))
+    expect(enter).toHaveBeenCalledTimes(1)
+
+    rerender(harness(area, undefined, undefined, second.source))
+    await delay()
+    // The stale hover is dropped without a cross-channel transition...
+    expect(leave).not.toHaveBeenCalled()
+
+    // ...and the new channel re-enters the same target on its first motion.
+    second.emit(sourceMoveEvent('none', 0, 0))
+    expect(enter).toHaveBeenCalledTimes(2)
+    expect(move).toHaveBeenCalledTimes(2)
+    expect(leave).not.toHaveBeenCalled()
+  })
+
+  it('keeps hover tracking while a drag stays captured on the press target', () => {
+    const source = fakeMouseEventSource()
+    const A = { x: 0, y: 0, width: 2, height: 2 }
+    const B = { x: 5, y: 5, width: 2, height: 2 }
+    const aMove = vi.fn()
+    const aLeave = vi.fn()
+    const bEnter = vi.fn()
+    const bMove = vi.fn()
+    const dragStart = vi.fn()
+    const dragMove = vi.fn()
+    const dragEnd = vi.fn()
+    const onClick = vi.fn()
+
+    render(
+      harness(
+        <>
+          <MouseProbe
+            bounds={A}
+            onClick={onClick}
+            onMove={aMove}
+            onLeave={aLeave}
+            onDragStart={dragStart}
+            onDragMove={dragMove}
+            onDragEnd={dragEnd}
+          />
+          <MouseProbe bounds={B} onEnter={bEnter} onMove={bMove} />
+        </>,
+        undefined,
+        undefined,
+        source.source,
+      ),
+    )
+
+    // Hover A, press on A, then drag the held button onto B.
+    source.emit(sourceMoveEvent('none', 0, 0))
+    expect(aMove).toHaveBeenCalledTimes(1)
+    source.emit(sourceButtonEvent('press', 0, 0))
+    source.emit(sourceMoveEvent('left', 5, 5))
+
+    // Hover transitioned A → B while the capture stayed on A.
+    expect(aLeave).toHaveBeenCalledTimes(1)
+    expect(bEnter).toHaveBeenCalledTimes(1)
+    expect(bMove).toHaveBeenCalledTimes(1)
+    expect(dragStart).toHaveBeenCalledTimes(1)
+    expect(dragStart).toHaveBeenCalledWith({ x: 5, y: 5, startX: 0, startY: 0 })
+    expect(dragMove).toHaveBeenCalledTimes(1)
+    expect(dragMove).toHaveBeenCalledWith({ x: 5, y: 5, startX: 0, startY: 0 })
+
+    // Releasing outside every area ends the capture without a click.
+    source.emit(sourceButtonEvent('release', 40, 40))
+    expect(dragEnd).toHaveBeenCalledTimes(1)
+    expect(dragEnd).toHaveBeenCalledWith({
+      x: 40,
+      y: 40,
+      startX: 0,
+      startY: 0,
+    })
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('consumes hover on a disabled overlay while the drag continues', async () => {
+    const A = { x: 0, y: 0, width: 2, height: 2 }
+    const D = { x: 5, y: 5, width: 2, height: 2 }
+    const aLeave = vi.fn()
+    const dEnter = vi.fn()
+    const dMove = vi.fn()
+    const dragStart = vi.fn()
+    const dragMove = vi.fn()
+    const dragEnd = vi.fn()
+    const onClick = vi.fn()
+    const { stdin } = render(
+      harness(
+        <>
+          <MouseProbe
+            bounds={A}
+            onClick={onClick}
+            onLeave={aLeave}
+            onDragStart={dragStart}
+            onDragMove={dragMove}
+            onDragEnd={dragEnd}
+          />
+          <MouseProbe
+            bounds={D}
+            disabled
+            onEnter={dEnter}
+            onMove={dMove}
+          />
+        </>,
+      ),
+    )
+
+    await press(stdin, 1, 1)
+    await move(stdin, 'none', 1, 1) // hover A
+    await move(stdin, 'left', 6, 6) // (5, 5) — disabled topmost overlay
+
+    // Hover left A and the disabled overlay consumed without callbacks; the
+    // capture on A still received the motion.
+    expect(aLeave).toHaveBeenCalledTimes(1)
+    expect(dEnter).not.toHaveBeenCalled()
+    expect(dMove).not.toHaveBeenCalled()
+    expect(dragStart).toHaveBeenCalledTimes(1)
+    expect(dragMove).toHaveBeenCalledTimes(1)
+
+    await release(stdin, 6, 6)
+    expect(dragEnd).toHaveBeenCalledTimes(1)
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('clears a started capture on provider teardown without callbacks', async () => {
+    const onClick = vi.fn()
+    const start = vi.fn()
+    const end = vi.fn()
+    const cancel = vi.fn()
+    const { stdin, unmount } = render(
+      harness(
+        <MouseProbe
+          bounds={AREA}
+          onClick={onClick}
+          onDragStart={start}
+          onDragEnd={end}
+          onDragCancel={cancel}
+        />,
+      ),
+    )
+
+    await press(stdin, 1, 1)
+    await move(stdin, 'left', 2, 2)
+    expect(start).toHaveBeenCalledTimes(1)
+
+    unmount()
+    await delay()
+    expect(cancel).not.toHaveBeenCalled()
+    expect(end).not.toHaveBeenCalled()
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('reports move routing through the same diagnostics sink', async () => {
+    const events: MouseDiagnosticEvent[] = []
+    const { stdin } = render(
+      harness(
+        <MouseProbe
+          bounds={AREA}
+          onDragStart={() => {}}
+          onDragMove={() => {}}
+          onDragEnd={() => {}}
+        />,
+        undefined,
+        (event) => events.push(event),
+      ),
+    )
+
+    await press(stdin, 1, 1)
+    await move(stdin, 'left', 2, 2)
+    await release(stdin, 2, 2)
+
+    expect(events.map((event) => `${event.action}:${event.reason}`)).toEqual([
+      'press:press-pending',
+      'move:drag-start',
+      'release:drag-end',
+    ])
+    expect(events[1]).toMatchObject({
+      action: 'move',
+      x: 1,
+      y: 1,
+      dispatched: true,
+      targetId: events[0]!.targetId,
+      containingCount: 1,
+    })
+  })
+
+  it('never hovers wheel-only regions and keeps wheel routing unchanged', () => {
+    const source = fakeMouseEventSource()
+    const WHEEL_AREA = { x: 0, y: 0, width: 4, height: 4 }
+    const onWheel = vi.fn(() => true)
+    const onEnter = vi.fn()
+    render(
+      harness(
+        <>
+          <MouseProbe bounds={WHEEL_AREA} onEnter={onEnter} />
+          <WheelRegionProbe id={9101} bounds={WHEEL_AREA} onWheel={onWheel} />
+        </>,
+        undefined,
+        undefined,
+        source.source,
+      ),
+    )
+
+    // The wheel region never shadows hover: the click area still receives it.
+    source.emit(sourceMoveEvent('none', 1, 1))
+    expect(onEnter).toHaveBeenCalledTimes(1)
+
+    source.emit(sourceWheelEvent('down', 1, 1))
+    expect(onWheel).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MouseProvider pointer mode lifecycle', () => {
+  it('enables 1003/1006 and resets both modes in reverse order', () => {
+    expect(MOUSE_ENABLE_SEQUENCE).toBe('\u001B[?1003h\u001B[?1006h')
+    expect(MOUSE_RESET_SEQUENCE).toBe('\u001B[?1006l\u001B[?1003l')
   })
 })

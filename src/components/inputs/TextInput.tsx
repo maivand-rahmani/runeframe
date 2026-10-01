@@ -28,11 +28,17 @@ export function TextInput({
   const isControlled = controlledValue !== undefined
   const [internalValue, setInternalValue] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [hovered, setHovered] = useState(false)
   const value = isControlled ? controlledValue : internalValue
   const { colors } = useTheme()
   const { suspend, restore } = useShellSuspension()
   const inputFocus = useInputFocus()
-  const mouseRef = useAutoMouseArea({ onClick: inputFocus.focus })
+  const mouseRef = useAutoMouseArea({
+    onClick: inputFocus.focus,
+    onEnter: () => setHovered(true),
+    onLeave: () => setHovered(false),
+  })
+  const showHoverCue = hovered
 
   const ref = useRef({
     value,
@@ -117,11 +123,17 @@ export function TextInput({
     <Box ref={mouseRef} flexDirection="column">
       <Box>
         {value.length > 0 ? (
-          <Text color={colors.text.primary}>{value}</Text>
+          <Text color={colors.text.primary} underline={showHoverCue}>
+            {value}
+          </Text>
         ) : (
-          <Text dimColor>{placeholder}</Text>
+          <Text dimColor underline={showHoverCue}>
+            {placeholder}
+          </Text>
         )}
-        <Text color={colors.focus.ring}>|</Text>
+        <Text color={colors.focus.ring} underline={showHoverCue}>
+          |
+        </Text>
       </Box>
       {error && (
         <Box marginTop={0}>

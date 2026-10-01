@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Text } from 'ink'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { FrameworkProvider } from '../../FrameworkProvider.js'
@@ -37,6 +38,20 @@ function cellInFrame(frame: string | undefined, text: string) {
   return { x: lines[y].indexOf(text), y }
 }
 
+function isUnderlined(frame: string | undefined) {
+  return /\u001B\[(?:\d+;)*4(?:;\d+)*m/.test(frame ?? '')
+}
+
+async function withColorOutput(run: () => Promise<void>) {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
+}
+
 async function clickCell(
   stdin: { write: (data: string) => unknown },
   cell: { x: number; y: number },
@@ -46,6 +61,14 @@ async function clickCell(
   stdin.write(`\u001B[<0;${x};${y}M`)
   await delay()
   stdin.write(`\u001B[<0;${x};${y}m`)
+  await delay()
+}
+
+async function moveCell(
+  stdin: { write: (data: string) => unknown },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<35;${cell.x + 1};${cell.y + 1}M`)
   await delay()
 }
 
@@ -230,6 +253,57 @@ describe('SelectableList', () => {
     stdin.write('\r')
     await delay()
     expect(activated).toEqual(['b'])
+  })
+
+  it('inherits List hover state for filtered rows without selecting them', async () => {
+    const selected: string[] = []
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <SelectableList
+          items={sampleItems}
+          filterQuery="a"
+          onSelect={(id) => selected.push(id)}
+          renderItem={(item, { focused, hovered }) => (
+            <Text>
+              {item.label} f={String(focused)} h={String(hovered)}
+            </Text>
+          )}
+        />
+      </MouseLayout>,
+    )
+
+    await delay(120)
+    await moveCell(stdin, cellInFrame(lastFrame(), 'Banana'))
+    expect(lastFrame()).toContain('Apple f=true h=false')
+    expect(lastFrame()).toContain('Banana f=false h=true')
+    expect(selected).toEqual([])
+  })
+
+  it('keeps a selected, focused filtered row underlined on hover', async () => {
+    await withColorOutput(async () => {
+      const selected: string[] = []
+      const { stdin, lastFrame } = renderInFramework(
+        <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+          <SelectableList
+            items={sampleItems}
+            filterQuery="Apple"
+            selectedId="a"
+            onSelect={(id) => selected.push(id)}
+            renderItem={(item, { focused, selected: isSelected, hovered }) => (
+              <Text>
+                {item.label} f={String(focused)} s={String(isSelected)} h={String(hovered)}
+              </Text>
+            )}
+          />
+        </MouseLayout>,
+      )
+
+      await delay(120)
+      await moveCell(stdin, cellInFrame(lastFrame(), 'Apple'))
+      expect(lastFrame()).toContain('Apple f=true s=true h=true')
+      expect(isUnderlined(lastFrame())).toBe(true)
+      expect(selected).toEqual([])
+    })
   })
 
   it('inherits List wheel scrolling without changing selection or activation', async () => {

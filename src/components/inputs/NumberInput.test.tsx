@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render } from 'ink-testing-library'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { NumberInput } from './NumberInput.js'
 import type { ReactElement } from 'react'
 import stripAnsi from 'strip-ansi'
+import chalk from 'chalk'
 import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
@@ -44,9 +45,23 @@ async function clickAt(
   await delay()
 }
 
+async function moveAt(
+  stdin: { write: (data: string) => void },
+  x: number,
+  y: number,
+) {
+  stdin.write(`\u001B[<35;${x + 1};${y + 1}M`)
+  await delay()
+}
+
 function delay(ms = 50) {
   return new Promise((r) => setTimeout(r, ms))
 }
+
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
 
 async function typeChars(
   stdin: { write: (d: string) => void },
@@ -269,5 +284,60 @@ describe('NumberInput', () => {
 
     expect(firstChange).not.toHaveBeenCalled()
     expect(secondChange).toHaveBeenCalledWith(11)
+  })
+
+  it('shows a hover cue without moving keyboard focus', async () => {
+    chalk.level = 1
+    const firstChange = vi.fn()
+    const secondChange = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
+        <NumberInput label="First" defaultValue={2} onChange={firstChange} />
+        <NumberInput label="Second" defaultValue={10} onChange={secondChange} />
+      </MouseLayout>,
+    )
+
+    await delay()
+    const initial = lastFrame() ?? ''
+    const second = findMarker(initial, 'Second:')
+    await moveAt(stdin, second.x, second.y)
+    const hovered = lastFrame() ?? ''
+    expect(hovered).not.toBe(initial)
+    expect(stripAnsi(hovered)).toBe(stripAnsi(initial))
+
+    await moveAt(stdin, 50, 50)
+    expect(lastFrame()).toBe(initial)
+
+    stdin.write('\u001B[A')
+    await delay()
+    expect(firstChange).toHaveBeenCalledWith(3)
+    expect(secondChange).not.toHaveBeenCalled()
+
+    await clickAt(stdin, second.x, second.y)
+    stdin.write('\u001B[A')
+    await delay()
+    expect(secondChange).toHaveBeenCalledWith(11)
+  })
+
+  it('shows the hover cue on the auto-focused number field', async () => {
+    chalk.level = 1
+    const onChange = vi.fn()
+    const { stdin, lastFrame } = renderInFramework(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <NumberInput label="Focused" defaultValue={10} onChange={onChange} />
+      </MouseLayout>,
+    )
+
+    await delay()
+    const initial = lastFrame() ?? ''
+    const field = findMarker(initial, 'Focused:')
+    await moveAt(stdin, field.x, field.y)
+    const hovered = lastFrame() ?? ''
+    expect(hovered).not.toBe(initial)
+    expect(stripAnsi(hovered)).toBe(stripAnsi(initial))
+
+    stdin.write('\u001B[A')
+    await delay()
+    expect(onChange).toHaveBeenCalledWith(11)
   })
 })

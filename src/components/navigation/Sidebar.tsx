@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Box, Text, useWindowSize } from 'ink'
 import { LAYOUT } from '../../constants.js'
@@ -63,6 +63,7 @@ function SidebarEntry({
   onAutoMouseActivate?: (focusItem: () => void) => void
 }) {
   const theme = useTheme()
+  const [hovered, setHovered] = useState(false)
   const { focused, onActivate } = useFocusable({ id: item.id })
   const onActivateRef = useRef(onActivate)
   onActivateRef.current = onActivate
@@ -74,19 +75,27 @@ function SidebarEntry({
   }, [active])
 
   const marker = focused ? '›' : active ? '•' : ' '
+  const focusedAppearance = focused && groupActive
+  const hoveredAppearance = hovered
   const labelColor = groupActive
     ? active
       ? theme.colors.focus.active
-      : focused
+      : focused || hoveredAppearance
         ? theme.colors.focus.ring
         : theme.colors.text.primary
     : active
       ? theme.colors.focus.active
-      : theme.colors.text.muted
+      : hoveredAppearance
+        ? theme.colors.focus.ring
+        : theme.colors.text.muted
 
   const rowContents = (
     <>
-      <Text color={labelColor} bold={active || (focused && groupActive)}>
+      <Text
+        color={labelColor}
+        bold={active || focusedAppearance}
+        underline={hovered}
+      >
         {marker} {item.label}
       </Text>
       {showDescription && item.description != null && item.description.length > 0 && (
@@ -99,6 +108,8 @@ function SidebarEntry({
     return (
       <MouseArea
         bounds={mouseBounds}
+        onEnter={() => setHovered(true)}
+        onLeave={() => setHovered(false)}
         onClick={() => onMouseActivate?.(onActivate, mouseBounds)}
       >
         <Box flexDirection="column" marginTop={theme.spacing.xs}>
@@ -113,6 +124,7 @@ function SidebarEntry({
       <SidebarAutoRow
         marginTop={theme.spacing.xs}
         onClick={() => onAutoMouseActivate?.(onActivate)}
+        onHoverChange={setHovered}
       >
         {rowContents}
       </SidebarAutoRow>
@@ -130,12 +142,18 @@ function SidebarAutoRow({
   children,
   marginTop,
   onClick,
+  onHoverChange,
 }: {
   children: ReactNode
   marginTop: number
   onClick: () => void
+  onHoverChange: (hovered: boolean) => void
 }) {
-  const ref = useAutoMouseArea({ onClick })
+  const ref = useAutoMouseArea({
+    onClick,
+    onEnter: () => onHoverChange(true),
+    onLeave: () => onHoverChange(false),
+  })
   return (
     <Box ref={ref} flexDirection="column" marginTop={marginTop}>
       {children}

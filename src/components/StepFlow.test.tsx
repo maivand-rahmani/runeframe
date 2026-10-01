@@ -11,6 +11,7 @@ import { MouseLayout } from '../interaction/mouse/MouseLayout.js'
 import { ScreenRegistry } from '../screens/registry.js'
 import { TextInput } from './inputs/TextInput.js'
 import stripAnsi from 'strip-ansi'
+import chalk from 'chalk'
 
 function renderWithProviders(ui: ReactElement) {
   return render(
@@ -55,6 +56,28 @@ async function clickAt(
   await delay()
   stdin.write(`\u001B[<0;${x + 1};${y + 1}m`)
   await delay()
+}
+
+async function hoverAt(
+  stdin: { write: (data: string) => void },
+  cell: { x: number; y: number },
+) {
+  stdin.write(`\u001B[<35;${cell.x + 1};${cell.y + 1}M`)
+  await delay()
+}
+
+function isUnderlined(frame: string | undefined) {
+  return frame?.includes('\u001B[4m') ?? false
+}
+
+async function withColorOutput(run: () => Promise<void>) {
+  const previousLevel = chalk.level
+  chalk.level = 1
+  try {
+    await run()
+  } finally {
+    chalk.level = previousLevel
+  }
 }
 
 function makeCaptureStep(id: string, title: string) {
@@ -381,4 +404,29 @@ describe('StepFlow', () => {
     expect(onComplete).toHaveBeenCalledTimes(1)
     expect(onComplete).toHaveBeenCalledWith({})
   })
+
+  it('highlights measured actions on hover without advancing, then keeps click and keyboard actions', async () => withColorOutput(async () => {
+    const { stdin, lastFrame } = renderWithMouse(
+      <MouseLayout origin={{ x: 0, y: 0 }}>
+        <StepFlow steps={[step1.step, step2.step, step3.step]} />
+      </MouseLayout>,
+    )
+
+    await delay()
+    const next = findMarker(lastFrame() ?? '', 'Next')
+    await hoverAt(stdin, next)
+    expect(isUnderlined(lastFrame())).toBe(true)
+    expect(lastFrame()).toContain('[1/3]')
+    expect(lastFrame()).toContain('Pick Track')
+
+    await hoverAt(stdin, { x: next.x, y: next.y + 3 })
+    expect(isUnderlined(lastFrame())).toBe(false)
+    expect(lastFrame()).toContain('[1/3]')
+
+    await clickAt(stdin, next.x, next.y)
+    expect(lastFrame()).toContain('Pick Mode')
+    stdin.write('\r')
+    await delay()
+    expect(lastFrame()).toContain('Pick Count')
+  }))
 })

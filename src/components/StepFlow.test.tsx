@@ -12,10 +12,21 @@ import { ScreenRegistry } from '../screens/registry.js'
 import { TextInput } from './inputs/TextInput.js'
 import stripAnsi from 'strip-ansi'
 import chalk from 'chalk'
+import type { ThemeOverrides } from '../types.js'
 
 function renderWithProviders(ui: ReactElement) {
   return render(
     <ThemeProvider>
+      <KeyboardScopeProvider defaultScope="navigation">
+        <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
+      </KeyboardScopeProvider>
+    </ThemeProvider>,
+  )
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(
+    <ThemeProvider theme={theme}>
       <KeyboardScopeProvider defaultScope="navigation">
         <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
       </KeyboardScopeProvider>
@@ -429,4 +440,77 @@ describe('StepFlow', () => {
     await delay()
     expect(lastFrame()).toContain('Pick Count')
   }))
+})
+
+describe('StepFlow theme integration', () => {
+  it('applies global stepFlow symbols to Back, Next and Finish', async () => {
+    const { lastFrame } = renderWithTheme(
+      { symbols: { stepFlow: { back: '<BACK>', next: '<NEXT>' } } },
+      <StepFlow steps={[step1.step, step2.step]} />,
+    )
+    await delay()
+    expect(lastFrame()).toContain('<NEXT> Next')
+
+    step1.getContext().goNext()
+    await delay()
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('<BACK> Back')
+    expect(frame).toContain('<NEXT> Finish')
+  })
+
+  it('lets component symbols override global stepFlow symbols', async () => {
+    const { lastFrame } = renderWithTheme(
+      {
+        symbols: { stepFlow: { back: '<BACK>', next: '<NEXT>' } },
+        components: { stepFlow: { symbols: { back: 'B', next: 'N' } } },
+      },
+      <StepFlow steps={[step1.step, step2.step]} />,
+    )
+    await delay()
+    expect(lastFrame()).toContain('N Next')
+
+    step1.getContext().goNext()
+    await delay()
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('B Back')
+    expect(frame).not.toContain('<BACK>')
+    expect(frame).not.toContain('<NEXT>')
+  })
+
+  it('applies the component hover color override to measured actions', async () => {
+    await withColorOutput(async () => {
+      const { stdin, lastFrame } = renderWithMouse(
+        <MouseLayout origin={{ x: 0, y: 0 }}>
+          <ThemeProvider
+            theme={{
+              components: { stepFlow: { colors: { hovered: 'magenta' } } },
+            }}
+          >
+            <StepFlow steps={[step1.step, step2.step]} />
+          </ThemeProvider>
+        </MouseLayout>,
+      )
+
+      await delay()
+      const next = findMarker(lastFrame() ?? '', 'Next')
+      await hoverAt(stdin, next)
+      expect(lastFrame()).toContain('\u001B[35m')
+    })
+  })
+
+  it('keeps the historical default labels without a theme', async () => {
+    const { lastFrame } = renderWithProviders(
+      <StepFlow steps={[step1.step, step2.step]} />,
+    )
+    await delay()
+    const first = lastFrame() ?? ''
+    expect(first).toContain('[esc] Cancel')
+    expect(first).toContain('[→/Enter] Next')
+
+    step1.getContext().goNext()
+    await delay()
+    const second = lastFrame() ?? ''
+    expect(second).toContain('[←] Back')
+    expect(second).toContain('[→] Finish')
+  })
 })

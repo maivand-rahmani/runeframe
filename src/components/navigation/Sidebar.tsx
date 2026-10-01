@@ -17,6 +17,10 @@ import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useMouseGeometry } from '../../interaction/mouse/MouseGeometryContext.js'
 import { useMouseRegistry } from '../../interaction/mouse/MouseProvider.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 
 export interface SidebarItem {
   id: string
@@ -63,6 +67,7 @@ function SidebarEntry({
   onAutoMouseActivate?: (focusItem: () => void) => void
 }) {
   const theme = useTheme()
+  const overrides = componentOverrides(theme, 'sidebar')
   const [hovered, setHovered] = useState(false)
   const { focused, onActivate } = useFocusable({ id: item.id })
   const onActivateRef = useRef(onActivate)
@@ -74,20 +79,44 @@ function SidebarEntry({
     }
   }, [active])
 
-  const marker = focused ? '›' : active ? '•' : ' '
+  // The global `sidebar.active`/`sidebar.item` symbols keep the historical
+  // cursor ('›') and current-screen ('•') markers; the unselected row marker
+  // has no global default and stays component-local.
+  const focusedMarker =
+    overrides?.symbols?.active ??
+    theme.symbols?.sidebar.active ??
+    '›'
+  const activeMarker =
+    overrides?.symbols?.item ??
+    theme.symbols?.sidebar.item ??
+    '•'
+  const itemMarker = overrides?.symbols?.unfocused ?? ' '
+  const marker = focused ? focusedMarker : active ? activeMarker : itemMarker
+  const itemMarginTop =
+    overrides?.spacing?.itemMarginTop ?? theme.spacing.xs
+  const activeColor = overrides?.colors?.active ?? theme.colors.focus.active
+  const focusedColor = overrides?.colors?.focused ?? theme.colors.focus.ring
+  const itemColor = overrides?.colors?.item ?? theme.colors.text.primary
+  const mutedColor = overrides?.colors?.muted ?? theme.colors.text.muted
+  const descriptionColor =
+    overrides?.colors?.description ?? theme.colors.text.secondary
+  const descriptionIndent = Math.max(
+    0,
+    overrides?.spacing?.descriptionIndent ?? 2,
+  )
   const focusedAppearance = focused && groupActive
   const hoveredAppearance = hovered
   const labelColor = groupActive
     ? active
-      ? theme.colors.focus.active
+      ? activeColor
       : focused || hoveredAppearance
-        ? theme.colors.focus.ring
-        : theme.colors.text.primary
+        ? focusedColor
+        : itemColor
     : active
-      ? theme.colors.focus.active
+      ? activeColor
       : hoveredAppearance
-        ? theme.colors.focus.ring
-        : theme.colors.text.muted
+        ? focusedColor
+        : mutedColor
 
   const rowContents = (
     <>
@@ -99,7 +128,10 @@ function SidebarEntry({
         {marker} {item.label}
       </Text>
       {showDescription && item.description != null && item.description.length > 0 && (
-        <Text color={theme.colors.text.secondary}>  {item.description}</Text>
+        <Text color={descriptionColor}>
+          {' '.repeat(descriptionIndent)}
+          {item.description}
+        </Text>
       )}
     </>
   )
@@ -112,7 +144,7 @@ function SidebarEntry({
         onLeave={() => setHovered(false)}
         onClick={() => onMouseActivate?.(onActivate, mouseBounds)}
       >
-        <Box flexDirection="column" marginTop={theme.spacing.xs}>
+        <Box flexDirection="column" marginTop={itemMarginTop}>
           {rowContents}
         </Box>
       </MouseArea>
@@ -122,7 +154,7 @@ function SidebarEntry({
   if (autoMouseEnabled) {
     return (
       <SidebarAutoRow
-        marginTop={theme.spacing.xs}
+        marginTop={itemMarginTop}
         onClick={() => onAutoMouseActivate?.(onActivate)}
         onHoverChange={setHovered}
       >
@@ -132,7 +164,7 @@ function SidebarEntry({
   }
 
   return (
-    <Box flexDirection="column" marginTop={theme.spacing.xs}>
+    <Box flexDirection="column" marginTop={itemMarginTop}>
       {rowContents}
     </Box>
   )
@@ -171,8 +203,15 @@ export function Sidebar({
   mouseBoundsForItem,
 }: SidebarProps) {
   const { columns: detectedColumns } = useWindowSize()
-  const columns = columnsOverride ?? detectedColumns ?? LAYOUT.medium
   const theme = useTheme()
+  const overrides = componentOverrides(theme, 'sidebar')
+  const mediumColumns = componentLayoutNumber(
+    theme,
+    'sidebar',
+    'mediumColumns',
+    theme.layout?.mediumColumns ?? LAYOUT.medium,
+  )
+  const columns = columnsOverride ?? detectedColumns ?? mediumColumns
   const { currentScreenId, push } = useNavigation()
   const mouseGeometry = useMouseGeometry()
   const mouseRegistry = useMouseRegistry()
@@ -192,7 +231,13 @@ export function Sidebar({
     autoFocus: !hasActiveItem,
     scope: 'navigation',
   })
-  const showDescriptions = columns >= LAYOUT.medium
+  const showDescriptions = columns >= mediumColumns
+  const sectionTitleColor =
+    overrides?.colors?.sectionTitle ?? theme.colors.text.muted
+  const sectionMarginBottom =
+    overrides?.spacing?.sectionMarginBottom ?? theme.spacing.sm
+  const footerMarginTop =
+    overrides?.spacing?.footerMarginTop ?? theme.spacing.sm
   const inputOrder = new Map(items.map((item, index) => [item.id, index]))
 
   // Handler state is kept in refs so keyboard registration is stable.
@@ -308,10 +353,12 @@ export function Sidebar({
                 key={category}
                 flexDirection="column"
                 marginBottom={
-                  categoryIndex < visibleGroups.length - 1 ? theme.spacing.sm : 0
+                  categoryIndex < visibleGroups.length - 1
+                    ? sectionMarginBottom
+                    : 0
                 }
               >
-                <Text bold color={theme.colors.text.muted}>
+                <Text bold color={sectionTitleColor}>
                   {sectionTitles?.[category] ?? category.toUpperCase()}
                 </Text>
                 {categoryItems.map((item) => (
@@ -338,7 +385,7 @@ export function Sidebar({
             )
           })}
           {footer != null && (
-            <MouseLayout marginTop={theme.spacing.sm}>{footer}</MouseLayout>
+            <MouseLayout marginTop={footerMarginTop}>{footer}</MouseLayout>
           )}
         </MouseLayout>
       </GroupProvider>

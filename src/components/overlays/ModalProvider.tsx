@@ -1,10 +1,14 @@
 import { useRef, useCallback, useEffect, type ReactNode } from 'react'
-import { Text } from 'ink'
+import { Text, type BoxProps } from 'ink'
 import { useNavigation } from '../../navigation/NavigationProvider.js'
 import { useTheme } from '../../design-system/ThemeProvider.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useKeyboardScope } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 
 export interface ModalProviderProps {
   children: ReactNode
@@ -20,7 +24,33 @@ export function ModalProvider({ children, onClose }: ModalProviderProps) {
     popModal,
   } = useNavigation()
   const { pushScope, popScope, isScopeActive } = useKeyboardScope()
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'modal')
+  const frameBorderStyle = (overrides?.borderStyle ??
+    theme.layout?.modalBorderStyle ??
+    theme.borderStyles.modal ??
+    'round') as BoxProps['borderStyle']
+  const frameBorderColor = overrides?.colors?.border ?? theme.colors.focus.ring
+  const paddingX =
+    overrides?.spacing?.paddingX ??
+    componentLayoutNumber(
+      theme,
+      'modal',
+      'paddingX',
+      theme.layout?.modalPaddingX ?? 1,
+    )
+  const paddingY =
+    overrides?.spacing?.paddingY ??
+    componentLayoutNumber(
+      theme,
+      'modal',
+      'paddingY',
+      theme.layout?.modalPaddingY ?? 1,
+    )
+  const topPadding = Math.max(
+    0,
+    componentLayoutNumber(theme, 'modal', 'topPadding', 2),
+  )
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
@@ -56,14 +86,14 @@ export function ModalProvider({ children, onClose }: ModalProviderProps) {
   return (
     <MouseLayout flexDirection="column" width="100%">
       <MouseLayout>
-        <Text dimColor>{'  '}</Text>
+        <Text dimColor>{' '.repeat(topPadding)}</Text>
       </MouseLayout>
       <MouseLayout flexDirection="column" alignItems="center" justifyContent="center">
         <MouseLayout
-          borderStyle="round"
-          borderColor={colors.focus.ring}
-          paddingX={1}
-          paddingY={1}
+          borderStyle={frameBorderStyle}
+          borderColor={frameBorderColor}
+          paddingX={paddingX}
+          paddingY={paddingY}
         >
           {currentModal.component({
             params: {},

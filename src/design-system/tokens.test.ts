@@ -4,6 +4,8 @@ import {
   semanticColors,
   typography,
   borderStyles,
+  themeSymbols,
+  themeLayout,
 } from './tokens.js'
 
 describe('spacing', () => {
@@ -83,6 +85,61 @@ describe('borderStyles', () => {
   it('all values are strings', () => {
     for (const value of Object.values(borderStyles)) {
       expect(typeof value).toBe('string')
+    }
+  })
+})
+
+describe('themeSymbols', () => {
+  it('matches the historical rendering defaults', () => {
+    expect(themeSymbols).toEqual({
+      button: { open: '[', close: ']' },
+      badge: { open: '[', close: ']' },
+      divider: { horizontal: '─' },
+      list: { marker: '•' },
+      radioList: { selected: '•', unselected: '○' },
+      sidebar: { active: '›', item: '•' },
+      tabs: { separator: '|' },
+      input: { open: '[', close: ']', separator: '|' },
+      stepFlow: { back: '[←]', next: '[→/Enter]' },
+    })
+  })
+
+  it('all values are strings', () => {
+    const collect = (value: unknown): void => {
+      if (typeof value === 'object' && value !== null) {
+        for (const entry of Object.values(value)) collect(entry)
+        return
+      }
+      expect(typeof value).toBe('string')
+    }
+    collect(themeSymbols)
+  })
+})
+
+describe('themeLayout', () => {
+  it('matches the historical layout defaults', () => {
+    expect(themeLayout).toEqual({
+      narrowColumns: 80,
+      mediumColumns: 100,
+      sidebarMaxItems: 8,
+      listMaxVisible: 10,
+      sidebarWidth: 20,
+      dividerWidth: 28,
+      modalPaddingX: 1,
+      modalPaddingY: 1,
+      modalMarginY: 1,
+      statusBarBorderStyle: 'single',
+      modalBorderStyle: 'round',
+      commandPaletteBorderStyle: 'round',
+      debugInspectorBorderStyle: 'single',
+      choicePromptMarginBottom: 1,
+    })
+  })
+
+  it('numeric metrics are integers', () => {
+    for (const [key, value] of Object.entries(themeLayout)) {
+      if (key.endsWith('BorderStyle')) continue
+      expect(Number.isInteger(value)).toBe(true)
     }
   })
 })

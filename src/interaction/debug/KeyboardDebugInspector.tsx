@@ -1,7 +1,9 @@
 import { useMemo } from 'react'
-import { Text, Box } from 'ink'
+import { Text, Box, type BoxProps } from 'ink'
 import type { EventTracer } from './EventTracer.js'
 import { useKeyboardScope } from '../keyboard/KeyboardScopeProvider.js'
+import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../../components/primitives/themeOverrides.js'
 import type { NormalizedKeyEvent } from '../../types.js'
 
 export interface KeyboardDebugInspectorProps {
@@ -24,6 +26,16 @@ export function KeyboardDebugInspector({
   getActiveScopeStack,
   getActiveFocusPath,
 }: KeyboardDebugInspectorProps) {
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'keyboardDebugInspector')
+  const borderStyle = (overrides?.borderStyle ??
+    theme.layout?.debugInspectorBorderStyle ??
+    'single') as BoxProps['borderStyle']
+  const paddingX = overrides?.spacing?.paddingX ?? theme.spacing.xs
+  const consumedColor =
+    overrides?.colors?.consumed ?? theme.colors.status.success
+  const unconsumedColor =
+    overrides?.colors?.unconsumed ?? theme.colors.status.warning
   const { activeScopes } = useKeyboardScope()
   const trace = useMemo(() => tracer.getTrace().slice(-10), [tracer])
   const scopeStack = useMemo(
@@ -36,7 +48,11 @@ export function KeyboardDebugInspector({
   )
 
   return (
-    <Box flexDirection="column" borderStyle="single" paddingX={1}>
+    <Box
+      flexDirection="column"
+      borderStyle={borderStyle}
+      paddingX={paddingX}
+    >
       <Text bold dimColor>
         ⚡ Keyboard Debug
       </Text>
@@ -69,7 +85,7 @@ export function KeyboardDebugInspector({
           trace.map((entry, i) => (
             <Text key={i}>
               {'  '}
-              <Text color={entry.consumedBy ? 'green' : 'yellow'}>
+              <Text color={entry.consumedBy ? consumedColor : unconsumedColor}>
                 {formatEvent(entry.event)}
               </Text>
               {entry.consumedBy ? (

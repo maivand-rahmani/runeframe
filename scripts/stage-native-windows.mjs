@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Stage validated NativeAOT helpers into the published `dist/` tree.
  *

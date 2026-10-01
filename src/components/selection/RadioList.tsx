@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../primitives/themeOverrides.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useRegisterActions } from '../../commands/actions/ScopedActionRegistryProvider.js'
@@ -251,29 +252,40 @@ function RadioListRow({
   mouseBounds?: MouseBounds
   onClick: () => void
 }) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'radioList')
+  const selectedSymbol =
+    overrides?.symbols?.selected ?? theme.symbols?.radioList.selected ?? '•'
+  const unselectedSymbol =
+    overrides?.symbols?.unselected ?? theme.symbols?.radioList.unselected ?? '○'
+  const mutedColor = overrides?.colors?.disabled ?? theme.colors.text.muted
+  const activeColor = overrides?.colors?.selected ?? theme.colors.focus.active
+  const ringColor = overrides?.colors?.focused ?? theme.colors.focus.ring
+  const selectedColor = overrides?.colors?.hovered ?? theme.colors.focus.selected
+  const secondaryColor = overrides?.colors?.symbol ?? theme.colors.text.secondary
+  const primaryColor = overrides?.colors?.label ?? theme.colors.text.primary
   const [hovered, setHovered] = useState(false)
   const disabled = Boolean(option.disabled)
   const color = disabled
-    ? colors.text.muted
+    ? mutedColor
     : selected
-      ? colors.focus.active
+      ? activeColor
       : focused
-        ? colors.focus.ring
+        ? ringColor
         : hovered
-          ? colors.focus.selected
+          ? selectedColor
           : undefined
   const rowContents = (
     <>
       <Text
-        color={color ?? colors.text.secondary}
+        color={color ?? secondaryColor}
         dimColor={disabled}
         underline={hovered && !disabled}
       >
-        {selected ? '•' : '○'}
+        {selected ? selectedSymbol : unselectedSymbol}
       </Text>
       <Text
-        color={color ?? colors.text.primary}
+        color={color ?? primaryColor}
         bold={focused || selected}
         dimColor={disabled}
         underline={hovered && !disabled}

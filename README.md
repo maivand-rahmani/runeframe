@@ -91,7 +91,7 @@ The Quickstart is a keyboard-capable shell as shown. Measured mouse targets requ
 
 Provider order (outermost → innermost):
 
-1. `ThemeProvider` — design tokens (`themeMode: 'dark' | 'light'`, default `'dark'`).
+1. `ThemeProvider` — design tokens (`themeMode: 'dark' | 'light'`, default `'dark'`) plus optional `theme?: ThemeOverrides` overrides.
 2. `KeyboardScopeProvider` — scope stack for keyboard dispatch.
 3. `FocusTreeProvider` — hierarchical focus zones/groups/focusables.
 4. `ScopedActionRegistryProvider` — action registration for hint bars and collision checks.
@@ -105,13 +105,14 @@ Provider order (outermost → innermost):
   registry={registry}
   defaultScreen="home"
   themeMode="dark"
+  theme={{ colors: { focus: { ring: 'magenta' } } }}
   onModalClose={() => {}}
 >
   <App />
 </FrameworkProvider>
 ```
 
-`FrameworkProviderProps`: `registry`, `defaultScreen`, `children`, `themeMode?`, `onModalClose?`.
+`FrameworkProviderProps`: `registry`, `defaultScreen`, `children`, `themeMode?`, `theme?`, `onModalClose?`.
 
 The lower-level providers are exported individually for manual composition (`ThemeProvider`, `KeyboardScopeProvider`, `FocusTreeProvider`, `ScopedActionRegistryProvider`, `NavigationProvider`, `ModalProvider`, `ToastProvider`). `MouseProvider` is internal and not a root export, so only `FrameworkProvider` assembles the complete supported stack, including mouse hit-testing.
 
@@ -522,7 +523,7 @@ The example only has valid automatic coordinates if the supplied origin is corre
 - **Origin and output limits.** The root origin is an assertion, not something Runeframe can discover. Normal-screen scrollback, `<Static>` output before the live tree, and uncoordinated stdout/stderr writes can move the live frame; automatic coordinates are only valid if the application keeps the origin accurate. Alternate-screen output at `(0, 0)` is common, not guaranteed. Without a valid measured root, keyboard behavior remains available and automatic targets stay inactive.
 - **Built-in targets.** Measurable controls such as buttons, navigation rows, list rows, tabs, inputs, and modal actions can use automatic hit areas inside the measured tree. No per-control rectangles are needed. `List`/`SelectableList` scroll their visible row window with the wheel and keep keyboard focus visible. `AppShell` wheel scrolling is enabled with `scrollContent` and `sidebarPosition="fixed"`, whether the sidebar is visible or hidden; a nested list gets the first chance and passes wheel input outward at its boundary. Wheel input changes viewport position only; it does not select or activate a row.
 - **Clipping limits.** Runeframe models its own measured viewport clips and scroll offsets. Arbitrary consumer clipping, transforms, and scroll containers are not inferred and are outside the automatic-geometry guarantee.
-- **Interactive output only.** TTY mouse reporting uses SGR; the Windows-native transport normalizes console records through the same mouse router. The test suite exercises synthetic input. Local win-x64 keyboard and click/wheel checks were reported in Windows Terminal with PowerShell and cmd; the user also reported a successful physical test-app check of hover/drag and click alignment after toasts. Other terminal emulators and PTYs remain unverified.
+- **Interactive output only.** TTY mouse reporting uses SGR; the Windows-native transport normalizes console records through the same mouse router. The test suite exercises synthetic input. Local win-x64 keyboard and click/wheel checks were reported in Windows Terminal with PowerShell and cmd. User-reported, not automated evidence: the physical test-app mouse check works well on macOS with zsh; a keyboard issue observed in that environment remains a later follow-up. Other terminal emulators and PTYs remain unverified.
 
 ### Explicit `MouseArea`
 
@@ -589,11 +590,114 @@ try {
 
 ## Theme
 
-`ThemeProvider` supplies the `ThemeTokens` (colors, spacing, typography, border styles) and accepts `mode: 'dark' | 'light'` (default `'dark'`). `useTheme()` returns the active tokens.
+Theming is additive: optional overrides layer on top of the built-in theme instead of replacing it. `ThemeProvider` and `FrameworkProvider` keep their existing `mode` / `themeMode` props (`'dark' | 'light'`, default `'dark'`) and also accept `theme?: ThemeOverrides`. With no `theme` prop, the default dark palette and comfortable density are exactly the current appearance; every override resolves on top of that base.
+
+```tsx
+<FrameworkProvider
+  registry={registry}
+  defaultScreen="home"
+  themeMode="dark"
+  theme={{ colors: { focus: { ring: 'magenta' } } }}
+>
+  <App />
+</FrameworkProvider>
+```
+
+`useTheme()` returns the fully resolved tokens for the surrounding provider. `useTheme<MyExtensions>()` adds an `extensions` field typed as `MyExtensions`, so applications can read their own values from the same resolved theme.
 
 ```tsx
 const { colors } = useTheme()
 <Text color={colors.focus.ring}>focused</Text>
+```
+
+### Overrides and inheritance
+
+`ThemeOverrides` is recursively partial: every field is optional, and `undefined` inherits the value already resolved by the enclosing provider. Plain objects deep-merge, arrays are replaced as a whole, and `0`/`''` are retained. A nested `ThemeProvider` inherits its parent's resolved values and deep-merges its own `theme` on top, so a screen or subtree can adjust a few tokens without resetting everything else. Setting `mode` on a nested provider swaps the color base to that mode's defaults while the other groups keep inheriting.
+
+| Group | Contents |
+| --- | --- |
+| `colors` | Partial nested palette: `text`, `status`, `focus`, `surface`, `border`. |
+| `spacing` | Spacing tokens; keys stay open so custom widgets can add tokens. |
+| `typography` | Typographic role tokens. |
+| `borderStyles` | Border style tokens. |
+| `density` | Spacing preset: `'compact' \| 'comfortable' \| 'spacious'` (default `'comfortable'`). Changes scale the inherited spacing, so nested density changes compose. |
+| `symbols` | Global glyph groups for the built-in widgets (see below). |
+| `layout` | Global layout keys: `narrowColumns`, `mediumColumns`, `sidebarMaxItems`, `listMaxVisible`, `sidebarWidth`, `dividerWidth`, `modalPaddingX`, `modalPaddingY`, `modalMarginY`, `statusBarBorderStyle`, `modalBorderStyle`, `commandPaletteBorderStyle`, `debugInspectorBorderStyle`, `choicePromptMarginBottom`. |
+| `components` | Per-component overrides keyed by component name; each accepts `colors`, `spacing`, `symbols`, `layout`, and `borderStyle`. Component names are an open map, so custom widgets can define their own keys. |
+| `extensions` | Free-form namespace for application data, typed through `useTheme<MyExtensions>()`. |
+
+Density presets scale spacing tokens only; they do not automatically resize every component or layout dimension. Use `layout` and named component overrides for the dimensions each built-in exposes.
+
+Global symbol groups and their keys:
+
+| Group | Keys (defaults) |
+| --- | --- |
+| `button` | `open`, `close` (`[`, `]`) |
+| `badge` | `open`, `close` (`[`, `]`) |
+| `divider` | `horizontal` (`─`) |
+| `list` | `marker` (`•`) |
+| `radioList` | `selected`, `unselected` (`•`, `○`) |
+| `sidebar` | `active`, `item` (`›`, `•`) |
+| `tabs` | `separator` (`|`) |
+| `input` | `open`, `close`, `separator` (`[`, `]`, `|`) |
+| `stepFlow` | `back`, `next` (`[←]`, `[→/Enter]`) |
+
+Overrides expose only these documented token groups. Components keep rendering through the same resolved tokens, so there is no pass-through of arbitrary Ink props, and not every arbitrary style is replaceable — only the tokens a component actually consumes can be changed. When both apply, a component override takes precedence over the global semantic token, which takes precedence over the built-in default.
+
+### Usage
+
+```tsx
+import { Text } from 'ink'
+import type { ThemeOverrides } from 'runeframe'
+import { FrameworkProvider, useTheme } from 'runeframe'
+
+// Typed application extensions are read back through useTheme<T>().
+type BrandExtensions = {
+  brand: {
+    accent: string
+    logo: string
+  }
+}
+
+const brandTheme: ThemeOverrides = {
+  // Custom palette: only the roles you name change; everything else inherits.
+  colors: {
+    focus: { ring: 'magenta' },
+    status: { success: 'greenBright' },
+  },
+  // Global symbol group (see the table above).
+  symbols: {
+    list: { marker: '▸' },
+  },
+  // Named component override; fields: colors, spacing, symbols, layout, borderStyle.
+  components: {
+    button: {
+      colors: { primary: 'magenta', focused: 'magentaBright' },
+      symbols: { open: '❮', close: '❯' },
+    },
+  },
+  // Custom extension data merged alongside the built-in tokens.
+  extensions: {
+    brand: { accent: 'magenta', logo: '✦' },
+  },
+}
+
+function BrandHeader() {
+  const { extensions } = useTheme<BrandExtensions>()
+  return <Text color={extensions.brand.accent}>{extensions.brand.logo} Ready</Text>
+}
+
+export function App() {
+  return (
+    <FrameworkProvider
+      registry={registry}
+      defaultScreen="home"
+      theme={brandTheme}
+    >
+      <BrandHeader />
+    </FrameworkProvider>
+  )
+}
 ```
 
 ## Diagnostics
@@ -621,6 +725,6 @@ npm run test-app                 # install + smoke-test the showcase app, then l
 npm run test-app:check           # install + typecheck + tests for the showcase app (CI)
 ```
 
-`examples/test-app` is a standalone consumer project pinned to the published `runeframe@0.5.0` package from the npm registry; it never imports the repository's `src/`, `dist/`, or a local tarball. `npm run test-app` installs its own dependencies on first run (later launches reuse the installed copy while its lockfile stamp is current), runs the automated showcase smoke test, and then starts the interactive Ink app. `npm run test-app:check` is the non-interactive variant used by CI.
+`examples/test-app` is a standalone local-source consumer: its TypeScript and Vitest aliases resolve the `runeframe` entry points to this repository's `src/`, while React and Ink are shared from the root install. `npm run test-app` installs its own dependencies on first run (later launches reuse the installed copy while its lockfile stamp is current), runs the automated showcase smoke test, and then starts the interactive Ink app. `npm run test-app:check` is the non-interactive typecheck-and-test command used by CI.
 
 See `REPOSITORY_SETUP.md` for repository configuration and release flow.

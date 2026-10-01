@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Box, Text } from 'ink'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../primitives/themeOverrides.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useInputFocus } from '../../interaction/focus/useInputFocus.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
@@ -24,7 +25,12 @@ export function SearchInput({
   const [internalValue, setInternalValue] = useState('')
   const [hovered, setHovered] = useState(false)
   const value = isControlled ? controlledValue : internalValue
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'searchInput')
+  const cursorColor = overrides?.colors?.cursor ?? theme.colors.focus.ring
+  const valueColor = overrides?.colors?.value
+  const cursor =
+    overrides?.symbols?.separator ?? theme.symbols?.input.separator ?? '|'
   const inputFocus = useInputFocus()
   const mouseRef = useAutoMouseArea({
     onClick: inputFocus.focus,
@@ -72,14 +78,16 @@ export function SearchInput({
   return (
     <Box ref={mouseRef}>
       {value.length > 0 ? (
-        <Text underline={showHoverCue}>{value}</Text>
+        <Text color={valueColor} underline={showHoverCue}>
+          {value}
+        </Text>
       ) : (
         <Text dimColor underline={showHoverCue}>
           {placeholder}
         </Text>
       )}
-      <Text color={colors.focus.ring} underline={showHoverCue}>
-        |
+      <Text color={cursorColor} underline={showHoverCue}>
+        {cursor}
       </Text>
     </Box>
   )

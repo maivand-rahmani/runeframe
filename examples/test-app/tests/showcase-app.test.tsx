@@ -424,6 +424,41 @@ describe('ShowcaseApp package-consumer smoke', () => {
     await pressUntilFrame(app, 'f', 'Toast provider is live.')
   })
 
+  it('switches shared theme tokens and keeps the nested preview override local', async () => {
+    const app = renderApp()
+    setTtyRows(app, 24)
+    await waitForFrame(app, 'MAINTAINER BENCH')
+
+    await clickText(app, 'Theme Studio')
+    await waitForFrame(app, 'THEME STUDIO / TOKENS')
+    await waitForFrame(app, 'palette: Cinder')
+    await waitForFrame(app, 'local-focus / plum')
+    await waitForFrame(app, 'inherits comfortable / signal')
+    await waitForFrame(app, '[Preview action]')
+    expect(frameRowCount(app)).toBeLessThanOrEqual(24)
+
+    // These controls update the FrameworkProvider's shared theme, while the
+    // nested preview keeps its local focus override and inherits the rest. The
+    // app starts with the historical square-bracket button symbols; Classic
+    // switches both buttons and badges to angle brackets.
+    await clickText(app, 'Tide')
+    await waitForFrame(app, 'palette: Tide')
+    await clickText(app, 'Compact')
+    await waitForFrame(app, 'density: compact')
+    await clickText(app, 'Classic')
+    await waitForFrame(app, 'symbols: classic')
+    await waitForFrame(app, 'inherits compact / classic')
+    await waitForFrame(app, '<Preview action>')
+    await waitForFrameWithout(app, '[Preview action]')
+
+    await clickText(app, 'Preview action')
+    await waitForFrame(app, 'Local preview action fired.')
+
+    // The established dark/light shortcut remains available on the new route.
+    await pressUntilFrame(app, 't', 'LIGHT / THEMES')
+    await pressUntilFrame(app, 't', 'DARK / THEMES')
+  })
+
   it('keeps the Interaction lab mouse button aligned with its visible row after toasts', async () => {
     const app = renderApp()
     setTtyRows(app, 24)

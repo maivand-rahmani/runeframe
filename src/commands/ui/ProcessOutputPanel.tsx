@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../../components/primitives/themeOverrides.js'
 import type {
   SessionEvent,
   SessionStatus,
@@ -14,14 +15,6 @@ export interface ProcessOutputPanelProps {
   activeCommand?: string | null
   /** Maximum number of visible output lines. Older lines are dropped. */
   maxVisibleLines?: number
-}
-
-const STATUS_COLORS: Record<SessionStatus, string> = {
-  idle: 'gray',
-  starting: 'yellow',
-  running: 'green',
-  complete: 'cyan',
-  error: 'red',
 }
 
 const STATUS_LABELS: Record<SessionStatus, string> = {
@@ -44,7 +37,27 @@ export function ProcessOutputPanel({
   activeCommand,
   maxVisibleLines = 500,
 }: ProcessOutputPanelProps) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'processOutputPanel')
+  const idleColor = overrides?.colors?.idle ?? theme.colors.text.secondary
+  const startingColor = overrides?.colors?.starting ?? theme.colors.status.warning
+  const runningColor = overrides?.colors?.running ?? theme.colors.status.success
+  const completeColor = overrides?.colors?.complete ?? theme.colors.focus.ring
+  const errorColor = overrides?.colors?.error ?? theme.colors.status.error
+  const infoColor = overrides?.colors?.info ?? theme.colors.status.info
+  const commandColor = overrides?.colors?.command ?? theme.colors.text.secondary
+  const stderrColor = overrides?.colors?.stderr ?? theme.colors.status.warning
+  const exitSuccessColor =
+    overrides?.colors?.exitSuccess ?? theme.colors.status.success
+  const exitErrorColor = overrides?.colors?.exitError ?? theme.colors.status.error
+
+  const statusColors: Record<SessionStatus, string> = {
+    idle: idleColor,
+    starting: startingColor,
+    running: runningColor,
+    complete: completeColor,
+    error: errorColor,
+  }
 
   const output = events.filter(
     (event) => event.type === 'stdout' || event.type === 'stderr',
@@ -63,17 +76,17 @@ export function ProcessOutputPanel({
     }
   }
 
-  const statusColor = STATUS_COLORS[status]
+  const statusColor = statusColors[status]
   const statusLabel = STATUS_LABELS[status]
 
   return (
     <Box flexDirection="column">
       {/* Status bar */}
       <Box>
-        <Text color={colors.status.info}>[</Text>
+        <Text color={infoColor}>[</Text>
         <Text color={statusColor}>{statusLabel}</Text>
         {activeCommand && (
-          <Text color={colors.text.secondary}>
+          <Text color={commandColor}>
             {' '}
             {activeCommand.length > 40
               ? activeCommand.slice(0, 37) + '...'
@@ -81,12 +94,12 @@ export function ProcessOutputPanel({
           </Text>
         )}
         {exitCode !== null && (
-          <Text color={exitCode === 0 ? colors.status.success : colors.status.error}>
+          <Text color={exitCode === 0 ? exitSuccessColor : exitErrorColor}>
             {' '}
             (exit {exitCode})
           </Text>
         )}
-        <Text color={colors.status.info}>]</Text>
+        <Text color={infoColor}>]</Text>
       </Box>
 
       {/* Output lines */}
@@ -95,7 +108,7 @@ export function ProcessOutputPanel({
           {visible.map((line, i) => (
             <Text
               key={i}
-              color={line.type === 'stderr' ? colors.status.warning : undefined}
+              color={line.type === 'stderr' ? stderrColor : undefined}
             >
               {line.data}
             </Text>
@@ -105,7 +118,9 @@ export function ProcessOutputPanel({
 
       {visible.length === 0 && (status === 'running' || status === 'starting') && (
         <Box>
-          <Text dimColor>Waiting for output...</Text>
+          <Text dimColor color={overrides?.colors?.muted}>
+            Waiting for output...
+          </Text>
         </Box>
       )}
     </Box>

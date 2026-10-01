@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Box, Text } from 'ink'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../primitives/themeOverrides.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useInputFocus } from '../../interaction/focus/useInputFocus.js'
@@ -40,7 +41,15 @@ export function NumberInput({
     if (defaultValue !== undefined) return String(defaultValue)
     return ''
   })
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'numberInput')
+  const openSymbol = overrides?.symbols?.open ?? theme.symbols?.input.open ?? '['
+  const closeSymbol =
+    overrides?.symbols?.close ?? theme.symbols?.input.close ?? ']'
+  const separator =
+    overrides?.symbols?.separator ?? theme.symbols?.input.separator ?? '|'
+  const ringColor = overrides?.colors?.ring ?? theme.colors.focus.ring
+  const valueColor = overrides?.colors?.value ?? theme.colors.text.primary
   const { suspend, restore } = useShellSuspension()
   const inputFocus = useInputFocus()
   const [hovered, setHovered] = useState(false)
@@ -197,12 +206,12 @@ export function NumberInput({
 
   return (
     <Box ref={mouseRef}>
-      <Text color={colors.focus.ring}>[</Text>
-      <Text color={colors.text.primary} underline={showHoverCue}>
+      <Text color={ringColor}>{openSymbol}</Text>
+      <Text color={valueColor} underline={showHoverCue}>
         {' '}{labelText}{shownValue}{' '}
       </Text>
-      <Text color={colors.focus.ring}>|</Text>
-      <Text color={colors.focus.ring}>]</Text>
+      <Text color={ringColor}>{separator}</Text>
+      <Text color={ringColor}>{closeSymbol}</Text>
     </Box>
   )
 }

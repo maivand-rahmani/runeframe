@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { render } from 'ink-testing-library'
 import { useEffect, type ReactNode } from 'react'
 import type { ReactElement } from 'react'
@@ -11,10 +11,26 @@ import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { ListSelect, type ListSelectItem } from './ListSelect.js'
+import type { ThemeOverrides } from '../../types.js'
+
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
 
 function renderInTheme(ui: ReactElement) {
   return render(
     <ThemeProvider>
+      <KeyboardScopeProvider defaultScope="list">
+        <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
+      </KeyboardScopeProvider>
+    </ThemeProvider>,
+  )
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(
+    <ThemeProvider theme={theme}>
       <KeyboardScopeProvider defaultScope="list">
         <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
       </KeyboardScopeProvider>
@@ -378,5 +394,31 @@ describe('ListSelect', () => {
     await delay()
 
     expect(selected).toEqual([])
+  })
+})
+
+describe('ListSelect theme integration', () => {
+  const items: ListSelectItem<string>[] = [
+    { value: 'a', label: 'Alpha' },
+    { value: 'b', label: 'Beta' },
+  ]
+
+  it('applies the component label color override', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      { components: { listSelect: { colors: { label: 'magenta' } } } },
+      <ListSelect items={items} onSelect={() => {}} />,
+    )
+    expect(lastFrame()).toContain('\u001B[35m')
+  })
+
+  it('keeps the default colors without a theme', () => {
+    chalk.level = 1
+    const { lastFrame } = renderInTheme(
+      <ListSelect items={items} onSelect={() => {}} />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('\u001B[36m')
+    expect(frame).toContain('Alpha')
   })
 })

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Box, Text } from 'ink'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../primitives/themeOverrides.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useInputFocus } from '../../interaction/focus/useInputFocus.js'
@@ -30,7 +31,13 @@ export function TextInput({
   const [error, setError] = useState<string | null>(null)
   const [hovered, setHovered] = useState(false)
   const value = isControlled ? controlledValue : internalValue
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'textInput')
+  const valueColor = overrides?.colors?.value ?? theme.colors.text.primary
+  const cursorColor = overrides?.colors?.cursor ?? theme.colors.focus.ring
+  const errorColor = overrides?.colors?.error ?? theme.colors.status.error
+  const cursor =
+    overrides?.symbols?.separator ?? theme.symbols?.input.separator ?? '|'
   const { suspend, restore } = useShellSuspension()
   const inputFocus = useInputFocus()
   const mouseRef = useAutoMouseArea({
@@ -123,7 +130,7 @@ export function TextInput({
     <Box ref={mouseRef} flexDirection="column">
       <Box>
         {value.length > 0 ? (
-          <Text color={colors.text.primary} underline={showHoverCue}>
+          <Text color={valueColor} underline={showHoverCue}>
             {value}
           </Text>
         ) : (
@@ -131,13 +138,13 @@ export function TextInput({
             {placeholder}
           </Text>
         )}
-        <Text color={colors.focus.ring} underline={showHoverCue}>
-          |
+        <Text color={cursorColor} underline={showHoverCue}>
+          {cursor}
         </Text>
       </Box>
       {error && (
         <Box marginTop={0}>
-          <Text color={colors.status.error}>{error}</Text>
+          <Text color={errorColor}>{error}</Text>
         </Box>
       )}
     </Box>

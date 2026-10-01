@@ -10,9 +10,14 @@ import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { ModalDialog } from '../overlays/ModalDialog.js'
+import type { ThemeOverrides } from '../../types.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(<ThemeProvider theme={theme}>{ui}</ThemeProvider>)
 }
 
 const mouseRegistry = new ScreenRegistry()
@@ -391,5 +396,57 @@ describe('TextInput', () => {
     stdin.write('x')
     await delay()
     expect(onChange).toHaveBeenCalledWith('x')
+  })
+})
+
+describe('TextInput theme integration', () => {
+  it('applies the global input separator as the cursor', () => {
+    const { lastFrame } = renderWithTheme(
+      { symbols: { input: { separator: '▏' } } },
+      <KeyboardScopeProvider defaultScope="textinput">
+        <TextInput value="test" />
+      </KeyboardScopeProvider>,
+    )
+    expect(stripAnsi(lastFrame() ?? '')).toContain('test▏')
+  })
+
+  it('lets the component separator override the global input separator', () => {
+    const { lastFrame } = renderWithTheme(
+      {
+        symbols: { input: { separator: '▏' } },
+        components: { textInput: { symbols: { separator: '│' } } },
+      },
+      <KeyboardScopeProvider defaultScope="textinput">
+        <TextInput value="test" />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(stripAnsi(frame)).toContain('test│')
+    expect(frame).not.toContain('▏')
+  })
+
+  it('applies component color overrides to the cursor', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      {
+        components: { textInput: { colors: { cursor: 'magenta' } } },
+      },
+      <KeyboardScopeProvider defaultScope="textinput">
+        <TextInput value="test" />
+      </KeyboardScopeProvider>,
+    )
+    expect(lastFrame()).toContain('\u001B[35m')
+  })
+
+  it('keeps the default cursor symbol and colors without a theme', () => {
+    chalk.level = 1
+    const { lastFrame } = renderInTheme(
+      <KeyboardScopeProvider defaultScope="textinput">
+        <TextInput value="test" />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(stripAnsi(frame)).toContain('test|')
+    expect(frame).toContain('\u001B[36m')
   })
 })

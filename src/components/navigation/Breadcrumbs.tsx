@@ -10,6 +10,10 @@ import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useMouseGeometry } from '../../interaction/mouse/MouseGeometryContext.js'
 import { useMouseRegistry } from '../../interaction/mouse/MouseProvider.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 
 export interface BreadcrumbsProps {
   onSelect?: (screenId: string) => void
@@ -19,11 +23,23 @@ export interface BreadcrumbsProps {
 
 export function Breadcrumbs({
   onSelect,
-  maxItems = 5,
-  separator = ' > ',
+  maxItems,
+  separator,
 }: BreadcrumbsProps) {
   const { breadcrumbs, registry } = useNavigation()
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const { colors } = theme
+  const overrides = componentOverrides(theme, 'breadcrumbs')
+  const resolvedSeparator =
+    separator ?? overrides?.symbols?.separator ?? ' > '
+  const resolvedMaxItems =
+    maxItems ??
+    componentLayoutNumber(theme, 'breadcrumbs', 'maxItems', 5)
+  const itemColor = overrides?.colors?.item ?? colors.text.secondary
+  const currentColor = overrides?.colors?.current ?? colors.focus.active
+  const hoverColor = overrides?.colors?.hover ?? colors.focus.ring
+  const separatorColor = overrides?.colors?.separator ?? colors.text.secondary
+  const ellipsis = overrides?.symbols?.ellipsis ?? '...'
   const mouseGeometry = useMouseGeometry()
   const mouseRegistry = useMouseRegistry()
   const itemKeysRef = useRef({
@@ -45,12 +61,12 @@ export function Breadcrumbs({
   })
 
   const items =
-    allItems.length <= maxItems
+    allItems.length <= resolvedMaxItems
       ? allItems
       : [
           allItems[0],
-          ...(maxItems > 2
-            ? [{ id: '', title: '...', key: 'ellipsis' } as const]
+          ...(resolvedMaxItems > 2
+            ? [{ id: '', title: ellipsis, key: 'ellipsis' } as const]
             : []),
           allItems[allItems.length - 1],
         ]
@@ -72,18 +88,18 @@ export function Breadcrumbs({
 
     if (i > 0) {
       elements.push(
-        <Text key={`sep-${i}`} color={colors.text.secondary}>
-          {separator}
+        <Text key={`sep-${i}`} color={separatorColor}>
+          {resolvedSeparator}
         </Text>,
       )
     }
 
-    const color = isLast ? colors.focus.active : colors.text.secondary
-    const dimColor = !isLast && item.title === '...'
+    const color = isLast ? currentColor : itemColor
+    const dimColor = !isLast && item.title === ellipsis
     const elementKey =
       autoMouseEnabled && !isLast && item.id !== ''
         ? `bc-${item.key}`
-        : `bc-${item.id || '...'}-${i}`
+        : `bc-${item.id || ellipsis}-${i}`
     elements.push(
       autoMouseEnabled && !isLast && item.id !== '' ? (
         <BreadcrumbMouseTarget
@@ -91,7 +107,7 @@ export function Breadcrumbs({
           id={item.id}
           title={item.title}
           color={color}
-          hoverColor={colors.focus.ring}
+          hoverColor={hoverColor}
           onSelect={onSelect}
         />
       ) : (

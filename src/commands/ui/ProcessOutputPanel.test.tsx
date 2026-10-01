@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Box, Text } from 'ink'
 import React, { type ReactElement } from 'react'
+import chalk from 'chalk'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { ProcessOutputPanel } from './ProcessOutputPanel.js'
+import type { ThemeOverrides } from '../../types.js'
 import {
   useAsyncSession,
   type UseAsyncSessionResult,
@@ -78,6 +80,15 @@ function delay(ms = 50) {
 function renderConsole(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
 }
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(<ThemeProvider theme={theme}>{ui}</ThemeProvider>)
+}
+
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
 
 function stdoutEvent(data: string): SessionEvent {
   return { type: 'stdout', data, timestamp: 0 }
@@ -616,5 +627,49 @@ describe('SessionEvent rendering', () => {
     expect(firstIdx).toBeGreaterThanOrEqual(0)
     expect(secondIdx).toBeGreaterThan(firstIdx)
     expect(thirdIdx).toBeGreaterThan(secondIdx)
+  })
+})
+
+// ── Theme Integration Tests ──
+
+describe('ProcessOutputPanel theme integration', () => {
+  it('applies global status colors', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      { colors: { status: { warning: 'magenta' } } },
+      <ProcessOutputPanel events={[]} status="starting" activeCommand={null} />,
+    )
+    expect(lastFrame()).toContain('\u001B[35m')
+  })
+
+  it('maps idle status to the global secondary text color', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      { colors: { text: { secondary: 'magenta' } } },
+      <ProcessOutputPanel events={[]} status="idle" activeCommand={null} />,
+    )
+    expect(lastFrame()).toContain('\u001B[35m')
+  })
+
+  it('lets component colors override global status colors', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      {
+        colors: { status: { success: 'magenta' } },
+        components: { processOutputPanel: { colors: { running: 'green' } } },
+      },
+      <ProcessOutputPanel events={[]} status="running" activeCommand="cmd" />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('\u001B[32m')
+    expect(frame).not.toContain('\u001B[35m')
+  })
+
+  it('keeps the historical status colors without a theme', () => {
+    chalk.level = 1
+    const { lastFrame } = renderConsole(
+      <ProcessOutputPanel events={[]} status="running" activeCommand="cmd" />,
+    )
+    expect(lastFrame()).toContain('\u001B[32m')
   })
 })

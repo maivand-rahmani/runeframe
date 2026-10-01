@@ -7,6 +7,10 @@ import {
 } from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useRegisterActions } from '../../commands/actions/ScopedActionRegistryProvider.js'
@@ -269,19 +273,30 @@ function OptionGridCell({
   autoMouseEnabled: boolean
   onClick: () => void
 }) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'optionGrid')
+  const gap = componentLayoutNumber(
+    theme,
+    'optionGrid',
+    'columnGap',
+    theme.spacing.sm,
+  )
+  const mutedColor = overrides?.colors?.disabled ?? theme.colors.text.muted
+  const activeColor = overrides?.colors?.focused ?? theme.colors.focus.active
+  const selectedColor = overrides?.colors?.hovered ?? theme.colors.focus.selected
+  const primaryColor = overrides?.colors?.label ?? theme.colors.text.primary
   const [hovered, setHovered] = useState(false)
   const disabled = Boolean(option.disabled)
   const content = (
     <Text
       color={
         disabled
-          ? colors.text.muted
+          ? mutedColor
           : focused
-            ? colors.focus.active
+            ? activeColor
             : hovered
-              ? colors.focus.selected
-              : colors.text.primary
+              ? selectedColor
+              : primaryColor
       }
       bold={focused && !disabled}
       dimColor={disabled}
@@ -294,6 +309,7 @@ function OptionGridCell({
   if (autoMouseEnabled) {
     return (
       <OptionGridAutoCell
+        gap={gap}
         disabled={disabled}
         onClick={onClick}
         onEnter={() => setHovered(true)}
@@ -304,17 +320,19 @@ function OptionGridCell({
     )
   }
 
-  return <Box marginRight={2}>{content}</Box>
+  return <Box marginRight={gap}>{content}</Box>
 }
 
 function OptionGridAutoCell({
   children,
+  gap,
   disabled,
   onClick,
   onEnter,
   onLeave,
 }: {
   children: ReactNode
+  gap: number
   disabled: boolean
   onClick: () => void
   onEnter: () => void
@@ -322,7 +340,7 @@ function OptionGridAutoCell({
 }) {
   const ref = useAutoMouseArea({ disabled, onClick, onEnter, onLeave })
   return (
-    <Box ref={ref} marginRight={2}>
+    <Box ref={ref} marginRight={gap}>
       {children}
     </Box>
   )

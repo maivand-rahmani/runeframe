@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { render } from 'ink-testing-library'
 import { useEffect, type ReactNode } from 'react'
 import type { ReactElement } from 'react'
 import chalk from 'chalk'
+import stripAnsi from 'strip-ansi'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { KeyboardScopeProvider } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useKeyboardScope } from '../../interaction/keyboard/KeyboardScopeProvider.js'
@@ -11,10 +12,26 @@ import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { RadioList } from './RadioList.js'
+import type { ThemeOverrides } from '../../types.js'
+
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
 
 function renderInTheme(ui: ReactElement) {
   return render(
     <ThemeProvider>
+      <KeyboardScopeProvider defaultScope="list">
+        <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
+      </KeyboardScopeProvider>
+    </ThemeProvider>,
+  )
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(
+    <ThemeProvider theme={theme}>
       <KeyboardScopeProvider defaultScope="list">
         <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
       </KeyboardScopeProvider>
@@ -322,5 +339,57 @@ describe('RadioList', () => {
     stdin.write('\r')
     await delay()
     expect(selected).toEqual(['c', 'c'])
+  })
+})
+
+describe('RadioList theme integration', () => {
+  it('applies global radio symbols', () => {
+    const { lastFrame } = renderWithTheme(
+      { symbols: { radioList: { selected: '◉', unselected: '◯' } } },
+      <RadioList options={sampleOptions} selected="opt1" onSelect={() => {}} />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(stripAnsi(frame)).toContain('◉ Option 1')
+    expect(stripAnsi(frame)).toContain('◯ Option 2')
+    expect(stripAnsi(frame)).toContain('◯ Option 3')
+  })
+
+  it('lets component symbols override global radio symbols', () => {
+    const { lastFrame } = renderWithTheme(
+      {
+        symbols: { radioList: { selected: '◉', unselected: '◯' } },
+        components: {
+          radioList: { symbols: { selected: '●', unselected: '○' } },
+        },
+      },
+      <RadioList options={sampleOptions} selected="opt1" onSelect={() => {}} />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(stripAnsi(frame)).toContain('● Option 1')
+    expect(frame).not.toContain('◉')
+  })
+
+  it('applies component color overrides to the selected symbol and label', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      {
+        components: {
+          radioList: { colors: { selected: 'magenta', label: 'green' } },
+        },
+      },
+      <RadioList options={sampleOptions} selected="opt1" onSelect={() => {}} />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('\u001B[35m')
+    expect(frame).toContain('\u001B[32m')
+  })
+
+  it('keeps the default radio symbols without a theme', () => {
+    const { lastFrame } = renderInTheme(
+      <RadioList options={sampleOptions} selected="opt1" onSelect={() => {}} />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(stripAnsi(frame)).toContain('• Option 1')
+    expect(stripAnsi(frame)).toContain('○ Option 2')
   })
 })

@@ -17,6 +17,10 @@ import {
 } from '../../interaction/focus/FocusTreeProvider.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 import { LAYOUT } from '../../constants.js'
 import { InputConsumptionResult } from '../../types.js'
 import { MouseArea } from '../../interaction/mouse/MouseArea.js'
@@ -54,17 +58,26 @@ export function List<T extends ListItem>({
   selectedId,
   onSelect,
   onActivate,
-  maxVisible = LAYOUT.listMaxVisible,
+  maxVisible,
   mouseBoundsForItem,
   renderItem,
 }: ListProps<T>) {
+  const theme = useTheme()
+  const resolvedMaxVisible =
+    maxVisible ??
+    componentLayoutNumber(
+      theme,
+      'list',
+      'maxVisible',
+      theme.layout?.listMaxVisible ?? LAYOUT.listMaxVisible,
+    )
   const mouseGeometry = useMouseGeometry()
   const mouseRegistry = useMouseRegistry()
   const autoMouseEnabled =
     mouseBoundsForItem == null &&
     mouseGeometry != null &&
     mouseRegistry != null
-  const safeMaxVisible = Math.max(1, maxVisible)
+  const safeMaxVisible = Math.max(1, resolvedMaxVisible)
   const maxScrollOffset = Math.max(0, items.length - safeMaxVisible)
   const [scrollOffset, setScrollOffset] = useState(0)
   const scrollOffsetRef = useRef(scrollOffset)
@@ -288,7 +301,20 @@ function ListItemRow({
   onAutoMouseSelect,
   renderItem,
 }: ListItemRowProps) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'list')
+  const marker = overrides?.symbols?.marker ?? theme.symbols?.list.marker ?? '•'
+  const markerCell = `${marker} `
+  const blankCell = ' '.repeat(marker.length + 1)
+  const descriptionIndent = ' '.repeat(
+    overrides?.spacing?.descriptionIndent ?? theme.spacing.sm,
+  )
+  const focusRing = overrides?.colors?.focused ?? theme.colors.focus.ring
+  const focusActive = overrides?.colors?.selected ?? theme.colors.focus.active
+  const focusSelected = overrides?.colors?.hovered ?? theme.colors.focus.selected
+  const textPrimary = overrides?.colors?.label ?? theme.colors.text.primary
+  const textSecondary =
+    overrides?.colors?.description ?? theme.colors.text.secondary
   const { focused, onActivate } = useFocusable({ id: item.id })
   const isSelected = selectedId === item.id
   const [hovered, setHovered] = useState(false)
@@ -306,25 +332,25 @@ function ListItemRow({
     rowContents = hovered ? underlineText(renderedItem) : renderedItem
   } else {
     const labelColor = focused
-      ? colors.focus.ring
+      ? focusRing
       : isSelected
-        ? colors.focus.active
+        ? focusActive
         : hovered
-          ? colors.focus.selected
-          : colors.text.primary
+          ? focusSelected
+          : textPrimary
 
     rowContents = (
       <>
         <Box>
           <Text color={labelColor} bold={isSelected} underline={hovered}>
-            {isSelected ? '• ' : '  '}
+            {isSelected ? markerCell : blankCell}
             {item.label}
           </Text>
         </Box>
         {item.description && (
           <Box>
-            <Text color={colors.text.secondary}>
-              {'  '}
+            <Text color={textSecondary}>
+              {descriptionIndent}
               {item.description}
             </Text>
           </Box>

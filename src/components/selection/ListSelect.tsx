@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../primitives/themeOverrides.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useRegisterActions } from '../../commands/actions/ScopedActionRegistryProvider.js'
@@ -255,19 +256,24 @@ function ListSelectRow<T>({
   mouseBounds?: MouseBounds
   onClick: () => void
 }) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'listSelect')
+  const mutedColor = overrides?.colors?.disabled ?? theme.colors.text.muted
+  const activeColor = overrides?.colors?.focused ?? theme.colors.focus.active
+  const selectedColor = overrides?.colors?.hovered ?? theme.colors.focus.selected
+  const primaryColor = overrides?.colors?.label ?? theme.colors.text.primary
   const [hovered, setHovered] = useState(false)
   const disabled = Boolean(item.disabled)
   const rowContents = (
     <Text
       color={
         disabled
-          ? colors.text.muted
+          ? mutedColor
           : focused
-            ? colors.focus.active
+            ? activeColor
             : hovered
-              ? colors.focus.selected
-              : colors.text.primary
+              ? selectedColor
+              : primaryColor
       }
       bold={focused && !disabled}
       dimColor={disabled}

@@ -11,6 +11,7 @@ import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { ActionRegistry } from '../actions/ActionRegistry.js'
 import { CommandPalette } from './CommandPalette.js'
+import type { ThemeOverrides } from '../../types.js'
 
 function createTestRegistry() {
   const r = new ActionRegistry()
@@ -59,6 +60,14 @@ async function typeChars(
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(
+    <ThemeProvider theme={theme}>
+      <KeyboardScopeProvider>{ui}</KeyboardScopeProvider>
+    </ThemeProvider>,
+  )
 }
 
 function delay(ms = 50) {
@@ -359,5 +368,55 @@ describe('CommandPalette', () => {
 
     await moveCell(stdin, cellInFrame(initial, 'TEST'))
     expect(lastFrame()).toBe(initial)
+  })
+})
+
+describe('CommandPalette theme integration', () => {
+  it('applies the global command palette border style', () => {
+    const { lastFrame } = renderWithTheme(
+      { layout: { commandPaletteBorderStyle: 'double' } },
+      <CommandPalette registry={createTestRegistry()} onClose={() => {}} />,
+    )
+    expect(lastFrame()).toContain('╔')
+  })
+
+  it('lets the component borderStyle override the global layout style', () => {
+    const { lastFrame } = renderWithTheme(
+      {
+        layout: { commandPaletteBorderStyle: 'double' },
+        components: { commandPalette: { borderStyle: 'bold' } },
+      },
+      <CommandPalette registry={createTestRegistry()} onClose={() => {}} />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('┏')
+    expect(frame).not.toContain('╔')
+  })
+
+  it('applies component color overrides to the border and selected row', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      {
+        components: {
+          commandPalette: { colors: { border: 'magenta', selected: 'green' } },
+        },
+      },
+      <CommandPalette registry={createTestRegistry()} onClose={() => {}} />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('\u001B[35m')
+    expect(frame).toContain('\u001B[32m')
+  })
+
+  it('keeps the default round border and colors without a theme', () => {
+    chalk.level = 1
+    const { lastFrame } = renderInTheme(
+      <KeyboardScopeProvider>
+        <CommandPalette registry={createTestRegistry()} onClose={() => {}} />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('╭')
+    expect(frame).toContain('\u001B[36m')
   })
 })

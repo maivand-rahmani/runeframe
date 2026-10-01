@@ -92,6 +92,112 @@ export interface ThemeTokens {
   spacing: Record<string, number>
   typography: Record<string, string>
   borderStyles: Record<string, string>
+  /** Optional so existing ThemeTokens literals keep compiling. */
+  density?: ThemeDensity
+  /** Optional so existing ThemeTokens literals keep compiling. */
+  symbols?: ThemeSymbols
+  /** Optional so existing ThemeTokens literals keep compiling. */
+  layout?: ThemeLayout
+  /** Optional so existing ThemeTokens literals keep compiling. */
+  components?: ThemeComponentOverrides
+  /** Optional so existing ThemeTokens literals keep compiling. */
+  extensions?: Record<string, unknown>
+}
+
+// ── Theme System ──
+
+/** Dark/light mode selector accepted by `ThemeProvider`/`FrameworkProvider`. */
+export type ThemeMode = 'dark' | 'light'
+
+/** Spacing density presets. `comfortable` preserves the historical scale. */
+export type ThemeDensity = 'compact' | 'comfortable' | 'spacious'
+
+/** Decorative symbols rendered by built-in widgets. */
+export interface ThemeSymbols {
+  button: { open: string; close: string }
+  badge: { open: string; close: string }
+  divider: { horizontal: string }
+  list: { marker: string }
+  radioList: { selected: string; unselected: string }
+  sidebar: { active: string; item: string }
+  tabs: { separator: string }
+  input: { open: string; close: string; separator: string }
+  stepFlow: { back: string; next: string }
+}
+
+/** Layout metrics used by the built-in shell and widgets. */
+export interface ThemeLayout {
+  narrowColumns: number
+  mediumColumns: number
+  sidebarMaxItems: number
+  listMaxVisible: number
+  sidebarWidth: number
+  dividerWidth: number
+  modalPaddingX: number
+  modalPaddingY: number
+  modalMarginY: number
+  statusBarBorderStyle: string
+  modalBorderStyle: string
+  commandPaletteBorderStyle: string
+  debugInspectorBorderStyle: string
+  choicePromptMarginBottom: number
+}
+
+/**
+ * Per-component semantic overrides. Component names are open strings so app
+ * authors can target custom widgets; only semantic token groups are exposed,
+ * never arbitrary Ink props.
+ */
+export interface ThemeComponentOverride {
+  colors?: Record<string, string>
+  spacing?: Record<string, number>
+  symbols?: Record<string, string>
+  layout?: Record<string, string | number>
+  borderStyle?: string
+}
+
+/** Open map of component-name → semantic overrides. */
+export type ThemeComponentOverrides = Record<string, ThemeComponentOverride>
+
+/**
+ * Recursively optional view of a token group: nested plain objects merge
+ * deeply, leaves replace. Used to type the partial `colors`/`symbols` groups.
+ */
+type ThemeGroupOverrides<T> = {
+  [K in keyof T]?: T[K] extends Record<string, unknown>
+    ? ThemeGroupOverrides<T[K]>
+    : T[K]
+}
+
+/**
+ * Deep partial theme override accepted by `ThemeProvider` and
+ * `FrameworkProvider`. Plain objects merge recursively, arrays replace,
+ * `undefined` inherits, and `0`/`''` are retained.
+ */
+export interface ThemeOverrides {
+  /** Partial nested color overrides. */
+  colors?: ThemeGroupOverrides<ThemeTokens['colors']>
+  /** Spacing overrides; keys stay open so custom widgets can add tokens. */
+  spacing?: Record<string, number | undefined>
+  typography?: Record<string, string | undefined>
+  borderStyles?: Record<string, string | undefined>
+  density?: ThemeDensity
+  /** Partial nested symbol overrides. */
+  symbols?: ThemeGroupOverrides<ThemeSymbols>
+  layout?: Record<string, string | number | undefined>
+  /** Per-component semantic overrides keyed by component name. */
+  components?: ThemeComponentOverrides
+  /** Free-form namespace for custom widget/theme extensions. */
+  extensions?: Record<string, unknown>
+}
+
+/** Fully resolved theme returned by `useTheme()`; extras are required. */
+export interface ResolvedThemeTokens extends ThemeTokens {
+  density: ThemeDensity
+  symbols: ThemeSymbols
+  layout: ThemeLayout
+  components: ThemeComponentOverrides
+  extensions: Record<string, unknown>
 }
 
 // ── Keyboard Shortcut ──

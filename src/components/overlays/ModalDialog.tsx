@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Text } from 'ink'
+import { Text, type BoxProps } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
@@ -9,6 +9,10 @@ import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useMouseGeometry } from '../../interaction/mouse/MouseGeometryContext.js'
 import { useMouseRegistry } from '../../interaction/mouse/MouseProvider.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 
 function isActionEnabled(action: Action): boolean {
   if (action.enabled === undefined) return true
@@ -86,7 +90,56 @@ export function ModalDialog({
   trapFocus = true,
   width,
 }: ModalDialogProps) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const { colors } = theme
+  const overrides = componentOverrides(theme, 'modalDialog')
+  const borderStyle = (overrides?.borderStyle ??
+    theme.layout?.modalBorderStyle ??
+    theme.borderStyles.modal ??
+    'round') as BoxProps['borderStyle']
+  const borderColor = overrides?.colors?.border ?? colors.focus.ring
+  const titleColor = overrides?.colors?.title ?? colors.focus.active
+  const keyColor = overrides?.colors?.key ?? colors.focus.active
+  const keyOpen = overrides?.symbols?.keyOpen ?? '['
+  const keyClose = overrides?.symbols?.keyClose ?? ']'
+  const paddingX =
+    overrides?.spacing?.paddingX ??
+    componentLayoutNumber(
+      theme,
+      'modalDialog',
+      'paddingX',
+      theme.layout?.modalPaddingX ?? 1,
+    )
+  const paddingY =
+    overrides?.spacing?.paddingY ??
+    componentLayoutNumber(
+      theme,
+      'modalDialog',
+      'paddingY',
+      theme.layout?.modalPaddingY ?? 1,
+    )
+  const bodyMarginY =
+    overrides?.spacing?.bodyMarginY ??
+    componentLayoutNumber(
+      theme,
+      'modalDialog',
+      'bodyMarginY',
+      theme.layout?.modalMarginY ?? 1,
+    )
+  const footerMarginTop =
+    overrides?.spacing?.footerMarginTop ??
+    componentLayoutNumber(
+      theme,
+      'modalDialog',
+      'footerMarginTop',
+      theme.layout?.modalMarginY ?? 1,
+    )
+  const footerGap = Math.max(
+    0,
+    overrides?.spacing?.footerGap ??
+      componentLayoutNumber(theme, 'modalDialog', 'footerGap', 2),
+  )
+  const keyLabelGap = Math.max(0, overrides?.spacing?.keyLabelGap ?? 1)
   const { suspend, restore } = useShellSuspension()
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
@@ -111,19 +164,19 @@ export function ModalDialog({
 
   return (
     <MouseLayout
-      borderStyle="round"
-      borderColor={colors.focus.ring}
-      paddingX={1}
-      paddingY={1}
+      borderStyle={borderStyle}
+      borderColor={borderColor}
+      paddingX={paddingX}
+      paddingY={paddingY}
       flexDirection="column"
       width={width}
     >
-      <Text bold color={colors.focus.active}>
+      <Text bold color={titleColor}>
         {title}
       </Text>
-      <MouseLayout marginY={1}>{children}</MouseLayout>
+      <MouseLayout marginY={bodyMarginY}>{children}</MouseLayout>
       {footer && footer.length > 0 && (
-        <MouseLayout marginTop={1}>
+        <MouseLayout marginTop={footerMarginTop}>
           {footer.map((action, idx) => (
             <FooterMouseTarget
               key={action.id}
@@ -133,13 +186,15 @@ export function ModalDialog({
               }}
             >
               <Text>
-                {idx > 0 && <Text>  </Text>}
+                {idx > 0 && <Text>{' '.repeat(footerGap)}</Text>}
                 {action.keys && action.keys.length > 0 && (
-                  <Text color={colors.focus.active}>
-                    [{action.keys[0]}]
+                  <Text color={keyColor}>
+                    {keyOpen}
+                    {action.keys[0]}
+                    {keyClose}
                   </Text>
                 )}
-                <Text> </Text>
+                <Text>{' '.repeat(keyLabelGap)}</Text>
                 <Text>{action.label}</Text>
               </Text>
             </FooterMouseTarget>

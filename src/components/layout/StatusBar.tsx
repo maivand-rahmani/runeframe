@@ -4,6 +4,10 @@ import { LAYOUT } from '../../constants.js'
 import { ScopedActionRegistryProvider } from '../../commands/actions/ScopedActionRegistryProvider.js'
 import { ActionRegistry } from '../../commands/actions/ActionRegistry.js'
 import { HotkeyHintBar } from '../../commands/ui/HotkeyHintBar.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 
 export interface StatusBarProps {
   mode?: string
@@ -18,7 +22,14 @@ export function StatusBar({
   registry,
 }: StatusBarProps) {
   const theme = useTheme()
-  const isCompact = columns < LAYOUT.narrow
+  const overrides = componentOverrides(theme, 'statusBar')
+  const narrowColumns = componentLayoutNumber(
+    theme,
+    'statusBar',
+    'narrowColumns',
+    theme.layout?.narrowColumns ?? LAYOUT.narrow,
+  )
+  const isCompact = columns < narrowColumns
 
   const hasMode = mode != null
   const hasRegistry = registry != null
@@ -37,11 +48,16 @@ export function StatusBar({
     <Box flexDirection="row" justifyContent="space-between">
       <Box>
         {hasMode && (
-          <Text color={theme.colors.text.muted}>Mode: {mode}</Text>
+          <Text color={overrides?.colors?.mode ?? theme.colors.text.muted}>
+            Mode: {mode}
+          </Text>
         )}
       </Box>
 
-      <Box flexDirection="row" gap={theme.spacing.sm}>
+      <Box
+        flexDirection="row"
+        gap={overrides?.spacing?.gap ?? theme.spacing.sm}
+      >
         {registryHints}
       </Box>
     </Box>

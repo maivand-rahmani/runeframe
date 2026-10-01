@@ -5,6 +5,7 @@ import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useMouseGeometry } from '../../interaction/mouse/MouseGeometryContext.js'
 import { useMouseRegistry } from '../../interaction/mouse/MouseProvider.js'
+import { componentOverrides } from '../primitives/themeOverrides.js'
 
 function ConfirmChoices({
   confirmLabel,
@@ -12,12 +13,18 @@ function ConfirmChoices({
   onConfirm,
   onCancel,
   activeColor,
+  openSymbol,
+  closeSymbol,
+  separator,
 }: {
   confirmLabel: string
   cancelLabel: string
   onConfirm: () => void
   onCancel: () => void
   activeColor: string
+  openSymbol: string
+  closeSymbol: string
+  separator: string
 }) {
   const geometry = useMouseGeometry()
   const registry = useMouseRegistry()
@@ -30,9 +37,17 @@ function ConfirmChoices({
   if (!hasMeasuredMouseHost) {
     return (
       <Text>
-        <Text color={activeColor}>[{confirmLabel}]</Text>
-        <Text dimColor> / </Text>
-        <Text dimColor>[{cancelLabel}]</Text>
+        <Text color={activeColor}>
+          {openSymbol}
+          {confirmLabel}
+          {closeSymbol}
+        </Text>
+        <Text dimColor>{separator}</Text>
+        <Text dimColor>
+          {openSymbol}
+          {cancelLabel}
+          {closeSymbol}
+        </Text>
       </Text>
     )
   }
@@ -40,11 +55,19 @@ function ConfirmChoices({
   return (
     <MouseLayout flexDirection="row">
       <MeasuredAction onClick={onConfirm}>
-        <Text color={activeColor}>[{confirmLabel}]</Text>
+        <Text color={activeColor}>
+          {openSymbol}
+          {confirmLabel}
+          {closeSymbol}
+        </Text>
       </MeasuredAction>
-      <Text dimColor> / </Text>
+      <Text dimColor>{separator}</Text>
       <MeasuredAction onClick={onCancel}>
-        <Text dimColor>[{cancelLabel}]</Text>
+        <Text dimColor>
+          {openSymbol}
+          {cancelLabel}
+          {closeSymbol}
+        </Text>
       </MeasuredAction>
     </MouseLayout>
   )
@@ -89,11 +112,20 @@ export function ConfirmModal({
   onCancel,
   danger,
 }: ConfirmModalProps) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const { colors } = theme
+  const overrides = componentOverrides(theme, 'confirmModal')
+  const titleColor = danger
+    ? overrides?.colors?.danger ?? colors.status.error
+    : overrides?.colors?.title ?? colors.focus.active
+  const confirmColor = overrides?.colors?.confirm ?? colors.focus.active
+  const openSymbol = overrides?.symbols?.open ?? '['
+  const closeSymbol = overrides?.symbols?.close ?? ']'
+  const separator = overrides?.symbols?.separator ?? ' / '
 
   return (
     <>
-      <Text bold color={danger ? colors.status.error : colors.focus.active}>
+      <Text bold color={titleColor}>
         {title}
       </Text>
       <Text>{message}</Text>
@@ -102,7 +134,10 @@ export function ConfirmModal({
         cancelLabel={cancelLabel}
         onConfirm={onConfirm}
         onCancel={onCancel}
-        activeColor={colors.focus.active}
+        activeColor={confirmColor}
+        openSymbol={openSymbol}
+        closeSymbol={closeSymbol}
+        separator={separator}
       />
     </>
   )

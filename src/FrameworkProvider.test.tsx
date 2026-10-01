@@ -180,6 +180,62 @@ describe('FrameworkProvider', () => {
     expect(lastFrame()).toContain('stack-ok')
   })
 
+  it('forwards theme overrides to the resolved theme context', () => {
+    function ThemeProbe() {
+      const theme = useTheme()
+      const ok =
+        theme.colors.text.primary === 'magenta' &&
+        theme.density === 'compact' &&
+        theme.spacing.md === 2 &&
+        theme.symbols.list.marker === '*' &&
+        theme.layout.sidebarWidth === 30 &&
+        theme.extensions.custom === 'yes'
+
+      return React.createElement(Text, null, ok ? 'theme-ok' : 'theme-broken')
+    }
+
+    const { lastFrame } = render(
+      React.createElement(FrameworkProvider, {
+        registry,
+        defaultScreen: 'home',
+        theme: {
+          colors: { text: { primary: 'magenta' } },
+          density: 'compact',
+          symbols: { list: { marker: '*' } },
+          layout: { sidebarWidth: 30 },
+          extensions: { custom: 'yes' },
+        },
+        children: React.createElement(ThemeProbe),
+      }),
+    )
+
+    expect(lastFrame()).toContain('theme-ok')
+  })
+
+  it('keeps themeMode working with forwarded theme overrides', () => {
+    function ThemeProbe() {
+      const theme = useTheme()
+      const ok =
+        theme.colors.text.primary === 'black' &&
+        theme.colors.surface.base === 'white' &&
+        theme.spacing.md === 9
+
+      return React.createElement(Text, null, ok ? 'light-ok' : 'light-broken')
+    }
+
+    const { lastFrame } = render(
+      React.createElement(FrameworkProvider, {
+        registry,
+        defaultScreen: 'home',
+        themeMode: 'light',
+        theme: { spacing: { md: 9 } },
+        children: React.createElement(ThemeProbe),
+      }),
+    )
+
+    expect(lastFrame()).toContain('light-ok')
+  })
+
   it('hosts the scoped action registry by default', async () => {
     function ActionConsumer() {
       useRegisterActions([

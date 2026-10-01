@@ -11,10 +11,21 @@ import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { OptionGrid } from './OptionGrid.js'
+import type { ThemeOverrides } from '../../types.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(
     <ThemeProvider>
+      <KeyboardScopeProvider defaultScope="list">
+        <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
+      </KeyboardScopeProvider>
+    </ThemeProvider>,
+  )
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(
+    <ThemeProvider theme={theme}>
       <KeyboardScopeProvider defaultScope="list">
         <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
       </KeyboardScopeProvider>
@@ -284,5 +295,40 @@ describe('OptionGrid', () => {
       await delay()
       expect(selected).toEqual(['opt1'])
     })
+  })
+})
+
+function plainFrame(frame: string | undefined): string {
+  return (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+}
+
+describe('OptionGrid theme integration', () => {
+  it('applies the component columnGap layout override', () => {
+    const { lastFrame } = renderWithTheme(
+      { components: { optionGrid: { layout: { columnGap: 4 } } } },
+      <OptionGrid options={sampleOptions.slice(0, 2)} onSelect={() => {}} />,
+    )
+    expect(plainFrame(lastFrame())).toContain('Option 1    Option 2')
+  })
+
+  it('applies the component label color override', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      {
+        components: { optionGrid: { colors: { label: 'magenta' } } },
+      },
+      <OptionGrid options={sampleOptions.slice(0, 2)} onSelect={() => {}} />,
+    )
+    expect(lastFrame()).toContain('\u001B[35m')
+  })
+
+  it('keeps the default column gap and colors without a theme', () => {
+    chalk.level = 1
+    const { lastFrame } = renderInTheme(
+      <OptionGrid options={sampleOptions.slice(0, 2)} onSelect={() => {}} />,
+    )
+    const frame = lastFrame() ?? ''
+    expect(plainFrame(frame)).toContain('Option 1  Option 2')
+    expect(frame).toContain('\u001B[36m')
   })
 })

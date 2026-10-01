@@ -9,6 +9,10 @@ import {
 } from 'react'
 import { Box, Text, useWindowSize } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 
 // ── Types ──
 
@@ -65,7 +69,16 @@ function toSingleLine(message: string): string {
 export function ToastProvider({ children }: ToastProviderProps) {
   const [toasts, setToasts] = useState<Toast[]>([])
   const idCounter = useRef(0)
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'toast')
+  const maxVisibleToasts = Math.max(
+    0,
+    componentLayoutNumber(theme, 'toast', 'maxVisible', MAX_VISIBLE_TOASTS),
+  )
+  const reservedRows = Math.max(
+    0,
+    componentLayoutNumber(theme, 'toast', 'reservedRows', 1),
+  )
   const { columns: detectedColumns, rows: detectedRows } = useWindowSize()
 
   const terminalRows =
@@ -79,8 +92,8 @@ export function ToastProvider({ children }: ToastProviderProps) {
 
   // Keep one terminal row free for the shell below: the host may occupy at
   // most rows - 1 physical lines, and never more than the existing stack cap.
-  const maxVisibleRows = Math.max(0, terminalRows - 1)
-  const visibleCount = Math.min(MAX_VISIBLE_TOASTS, maxVisibleRows)
+  const maxVisibleRows = Math.max(0, terminalRows - reservedRows)
+  const visibleCount = Math.min(maxVisibleToasts, maxVisibleRows)
   const visibleToasts =
     visibleCount > 0
       ? toasts.slice(Math.max(0, toasts.length - visibleCount))
@@ -100,9 +113,12 @@ export function ToastProvider({ children }: ToastProviderProps) {
       const id = String(++idCounter.current)
 
       setToasts((prev) => {
+        if (maxVisibleToasts === 0) {
+          return []
+        }
         const next = [...prev, { id, variant, message, timeout }]
-        if (next.length > MAX_VISIBLE_TOASTS) {
-          return next.slice(-MAX_VISIBLE_TOASTS)
+        if (next.length > maxVisibleToasts) {
+          return next.slice(-maxVisibleToasts)
         }
         return next
       })
@@ -125,7 +141,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
         },
       }
     },
-    [removeToast],
+    [removeToast, maxVisibleToasts],
   )
 
   const contextValue = useMemo<ToastContextValue>(
@@ -139,7 +155,13 @@ export function ToastProvider({ children }: ToastProviderProps) {
         <Box flexDirection="column">
           {visibleToasts.map((t) => (
             <Box key={t.id} width={terminalColumns}>
-              <Text color={colors.status[t.variant]} wrap="truncate">
+              <Text
+                color={
+                  overrides?.colors?.[t.variant] ??
+                  theme.colors.status[t.variant]
+                }
+                wrap="truncate"
+              >
                 {toSingleLine(t.message)}
               </Text>
             </Box>

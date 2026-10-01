@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { render } from 'ink-testing-library'
 import { Text } from 'ink'
 import chalk from 'chalk'
@@ -10,9 +10,19 @@ import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { SelectableList } from './SelectableList.js'
 import type { ReactElement } from 'react'
 import type { ListItem } from './List.js'
+import type { ThemeOverrides } from '../../types.js'
+
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(<ThemeProvider theme={theme}>{ui}</ThemeProvider>)
 }
 
 const interactionRegistry = new ScreenRegistry()
@@ -337,5 +347,31 @@ describe('SelectableList', () => {
     expect(lastFrame()).toContain('Selectable 2')
     expect(selected).toEqual([])
     expect(activated).toEqual([])
+  })
+})
+
+describe('SelectableList theme integration', () => {
+  it('applies the component empty-state color override', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      { components: { selectableList: { colors: { empty: 'magenta' } } } },
+      <KeyboardScopeProvider defaultScope="list">
+        <SelectableList items={[]} />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('No results')
+    expect(frame).toContain('\u001B[35m')
+  })
+
+  it('delegates list symbols to the list component overrides', () => {
+    const items: ListItem[] = [{ id: 'a', label: 'Only item' }]
+    const { lastFrame } = renderWithTheme(
+      { components: { list: { symbols: { marker: '▸' } } } },
+      <KeyboardScopeProvider defaultScope="list">
+        <SelectableList items={items} selectedId="a" />
+      </KeyboardScopeProvider>,
+    )
+    expect(lastFrame()).toContain('▸ Only item')
   })
 })

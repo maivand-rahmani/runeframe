@@ -1,5 +1,6 @@
 import { Box } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from './themeOverrides.js'
 
 export interface SpacerProps {
   size?: 'sm' | 'md' | 'lg'
@@ -7,5 +8,6 @@ export interface SpacerProps {
 
 export function Spacer({ size = 'md' }: SpacerProps) {
   const theme = useTheme()
-  return <Box height={theme.spacing[size]} />
+  const overrides = componentOverrides(theme, 'spacer')
+  return <Box height={overrides?.spacing?.[size] ?? theme.spacing[size]} />
 }

@@ -14,11 +14,17 @@ import {
 import type { MouseEventSource } from './interaction/mouse/MouseEventSource.js'
 import { ModalProvider } from './components/overlays/ModalProvider.js'
 import { ToastProvider } from './components/feedback/ToastProvider.js'
+import type { ThemeMode, ThemeOverrides } from './types.js'
 
 export interface FrameworkProviderProps
   extends Pick<NavigationProviderProps, 'registry' | 'defaultScreen'> {
   children: ReactNode
-  themeMode?: 'dark' | 'light'
+  themeMode?: ThemeMode
+  /**
+   * Deep-partial theme overrides applied to the provider-level
+   * `ThemeProvider`. Nested providers deep-merge on top of inherited values.
+   */
+  theme?: ThemeOverrides
   onModalClose?: () => void
   /**
    * Optional opt-in mouse routing diagnostics forwarded to `MouseProvider`.
@@ -52,13 +58,14 @@ export function FrameworkProvider({
   children,
   registry,
   defaultScreen,
-  themeMode = 'dark',
+  themeMode,
+  theme,
   onModalClose,
   mouseDiagnostics,
   mouseEventSource,
 }: FrameworkProviderProps) {
   return (
-    <ThemeProvider mode={themeMode}>
+    <ThemeProvider mode={themeMode} theme={theme}>
       <KeyboardScopeProvider>
         <FocusTreeProvider>
           <ScopedActionRegistryProvider>

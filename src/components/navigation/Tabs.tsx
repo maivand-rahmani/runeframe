@@ -7,6 +7,10 @@ import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useMouseGeometry } from '../../interaction/mouse/MouseGeometryContext.js'
 import { useMouseRegistry } from '../../interaction/mouse/MouseProvider.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 
 export interface Tab {
   id: string
@@ -24,10 +28,11 @@ export interface TabsProps {
 function truncateLabel(
   label: string,
   availableWidth: number,
+  ellipsis: string,
 ): string {
   if (availableWidth <= 0) return ''
   if (label.length <= availableWidth) return label
-  return label.slice(0, Math.max(1, availableWidth - 1)) + '…'
+  return label.slice(0, Math.max(1, availableWidth - 1)) + ellipsis
 }
 
 export function Tabs({
@@ -36,7 +41,9 @@ export function Tabs({
   onChange,
   scope = 'list',
 }: TabsProps): ReactElement | null {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const { colors } = theme
+  const overrides = componentOverrides(theme, 'tabs')
   const mouseGeometry = useMouseGeometry()
   const mouseRegistry = useMouseRegistry()
   const autoMouseEnabled =
@@ -44,7 +51,14 @@ export function Tabs({
     mouseGeometry.origin != null &&
     mouseGeometry.clip != null &&
     mouseRegistry != null
-  const columns = process.stdout.columns ?? 80
+  const columns =
+    process.stdout.columns ??
+    componentLayoutNumber(
+      theme,
+      'tabs',
+      'fallbackColumns',
+      theme.layout?.narrowColumns ?? 80,
+    )
 
   // Use refs so the input handler always reads the latest values
   // without needing to re-register (which creates a gap between cleanup and setup).
@@ -87,13 +101,24 @@ export function Tabs({
 
   if (tabs.length === 0) return null
 
-  const separatorText = ' | '
+  // Global/component symbols carry the glyph only; the historical rendering
+  // surrounded it with single spaces (` | `).
+  const separatorGlyph =
+    overrides?.symbols?.separator ??
+    theme.symbols?.tabs.separator ??
+    '|'
+  const separatorText = ` ${separatorGlyph} `
   const separatorWidth = separatorText.length
   const totalSeparatorWidth = separatorWidth * Math.max(0, tabs.length - 1)
   const perTabWidth = Math.max(
     1,
     Math.floor((columns - totalSeparatorWidth) / tabs.length),
   )
+  const ellipsis = overrides?.symbols?.ellipsis ?? '\u2026'
+  const activeColor = overrides?.colors?.active ?? colors.focus.active
+  const inactiveColor = overrides?.colors?.inactive ?? colors.text.secondary
+  const hoverColor = overrides?.colors?.hover ?? colors.focus.ring
+  const separatorColor = overrides?.colors?.separator ?? colors.text.muted
 
   const elements: ReactElement[] = []
 
@@ -103,13 +128,13 @@ export function Tabs({
 
     if (i > 0) {
       elements.push(
-        <Text key={`sep-${i}`} color={colors.text.muted}>
+        <Text key={`sep-${i}`} color={separatorColor}>
           {separatorText}
         </Text>,
       )
     }
 
-    const label = truncateLabel(tab.label, perTabWidth)
+    const label = truncateLabel(tab.label, perTabWidth, ellipsis)
     elements.push(
       autoMouseEnabled ? (
         <TabMouseTarget
@@ -118,15 +143,15 @@ export function Tabs({
           label={label}
           active={isActive}
           scope={scope}
-          color={isActive ? colors.focus.active : colors.text.secondary}
-          hoverColor={colors.focus.ring}
+          color={isActive ? activeColor : inactiveColor}
+          hoverColor={hoverColor}
           onChange={onChange}
         />
       ) : (
         <Text
           key={`tab-${tab.id}`}
           bold={isActive}
-          color={isActive ? colors.focus.active : colors.text.secondary}
+          color={isActive ? activeColor : inactiveColor}
         >
           {label}
         </Text>

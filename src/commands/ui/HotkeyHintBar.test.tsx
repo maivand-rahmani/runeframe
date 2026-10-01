@@ -1,11 +1,19 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { render } from 'ink-testing-library'
 import React, { type ReactNode } from 'react'
+import chalk from 'chalk'
+import stripAnsi from 'strip-ansi'
 import { ThemeProvider } from '../../design-system/ThemeProvider.js'
 import { ScopedActionRegistryProvider } from '../actions/ScopedActionRegistryProvider.js'
 import { ActionRegistry } from '../actions/ActionRegistry.js'
 import type { Action } from '../actions/ActionRegistry.js'
 import { HotkeyHintBar } from './HotkeyHintBar.js'
+import type { ThemeOverrides } from '../../types.js'
+
+const originalChalkLevel = chalk.level
+afterEach(() => {
+  chalk.level = originalChalkLevel
+})
 
 function renderInContext(
   ui: ReactNode,
@@ -13,6 +21,20 @@ function renderInContext(
 ) {
   return render(
     <ThemeProvider>
+      <ScopedActionRegistryProvider registry={registry}>
+        {ui}
+      </ScopedActionRegistryProvider>
+    </ThemeProvider>,
+  )
+}
+
+function renderWithTheme(
+  theme: ThemeOverrides,
+  ui: ReactNode,
+  registry: ActionRegistry,
+) {
+  return render(
+    <ThemeProvider theme={theme}>
       <ScopedActionRegistryProvider registry={registry}>
         {ui}
       </ScopedActionRegistryProvider>
@@ -292,5 +314,53 @@ describe('HotkeyHintBar', () => {
 
     expect(lastFrame()).toContain('[e] Enabled')
     expect(lastFrame()).not.toContain('[d] Disabled')
+  })
+})
+
+describe('HotkeyHintBar theme integration', () => {
+  const registry = makeRegistry([
+    {
+      id: 'a',
+      label: 'Alpha',
+      category: 'system',
+      handler: () => {},
+      keys: ['a'],
+      scope: 'navigation',
+    },
+    {
+      id: 'b',
+      label: 'Beta',
+      category: 'system',
+      handler: () => {},
+      keys: ['b'],
+      scope: 'navigation',
+    },
+  ])
+
+  it('applies the component gap override', () => {
+    const { lastFrame } = renderWithTheme(
+      { components: { hotkeyHintBar: { spacing: { gap: 4 } } } },
+      <HotkeyHintBar />,
+      registry,
+    )
+    expect(lastFrame()).toContain('[a] Alpha    [b] Beta')
+  })
+
+  it('applies the component text color override', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      { components: { hotkeyHintBar: { colors: { text: 'magenta' } } } },
+      <HotkeyHintBar />,
+      registry,
+    )
+    expect(lastFrame()).toContain('\u001B[35m')
+  })
+
+  it('keeps the default gap and color without a theme', () => {
+    chalk.level = 1
+    const { lastFrame } = renderInContext(<HotkeyHintBar />, registry)
+    const frame = lastFrame() ?? ''
+    expect(stripAnsi(frame)).toContain('[a] Alpha  [b] Beta')
+    expect(frame).toContain('\u001B[90m')
   })
 })

@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react'
 import { Box, Text } from 'ink'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../primitives/themeOverrides.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useInputFocus } from '../../interaction/focus/useInputFocus.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
@@ -23,9 +24,16 @@ export function CommandInput({
   onSubmit,
   onCancel,
   placeholder = '',
-  prompt = '>',
+  prompt,
 }: CommandInputProps) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'commandInput')
+  const promptSymbol = prompt ?? overrides?.symbols?.prompt ?? '>'
+  const promptColor = overrides?.colors?.prompt ?? theme.colors.focus.ring
+  const valueColor = overrides?.colors?.value ?? theme.colors.text.primary
+  const cursorColor = overrides?.colors?.cursor ?? theme.colors.focus.ring
+  const cursor =
+    overrides?.symbols?.separator ?? theme.symbols?.input.separator ?? '|'
   const inputFocus = useInputFocus()
   const [hovered, setHovered] = useState(false)
   const mouseRef = useAutoMouseArea({
@@ -85,12 +93,12 @@ export function CommandInput({
 
   return (
     <Box ref={mouseRef}>
-      <Text color={colors.focus.ring} underline={showHoverCue}>
-        {prompt}
+      <Text color={promptColor} underline={showHoverCue}>
+        {promptSymbol}
       </Text>
       <Text> </Text>
       {value.length > 0 ? (
-        <Text color={colors.text.primary} underline={showHoverCue}>
+        <Text color={valueColor} underline={showHoverCue}>
           {displayText}
         </Text>
       ) : (
@@ -98,8 +106,8 @@ export function CommandInput({
           {displayText}
         </Text>
       )}
-      <Text color={colors.focus.ring} underline={showHoverCue}>
-        |
+      <Text color={cursorColor} underline={showHoverCue}>
+        {cursor}
       </Text>
     </Box>
   )

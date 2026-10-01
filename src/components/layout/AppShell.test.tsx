@@ -263,10 +263,16 @@ describe('AppShell', () => {
           </AppShell>
         </MouseLayout>,
       )
+      // Automatic mouse targets register from commit-phase layout effects and
+      // anchor after the measurement chain settles; under parallel test load
+      // that chain can outlast a fixed tick, so retry the click until the
+      // registered area is live. Activation is synchronous per click, so a
+      // successful click is never repeated.
       await new Promise((resolve) => setTimeout(resolve, 250))
-
-      const cell = cellInFrame(lastFrame(), '[Go]')
-      await clickAtCell(stdin, cell)
+      for (let attempt = 0; attempt < 20 && activated.length === 0; attempt++) {
+        const cell = cellInFrame(lastFrame(), '[Go]')
+        await clickAtCell(stdin, cell)
+      }
       expect(activated).toEqual(['go'])
     },
   )

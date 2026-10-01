@@ -9,6 +9,7 @@ import {
 import {
   useBoxMetrics,
   useWindowSize,
+  type BoxProps,
   type DOMElement,
 } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
@@ -19,6 +20,11 @@ import { InputConsumptionResult } from '../../types.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { MouseScrollLayout } from '../../interaction/mouse/MouseScrollLayout.js'
 import { useToastVisibleRows } from '../feedback/ToastProvider.js'
+import {
+  componentLayoutNumber,
+  componentLayoutString,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 
 export interface AppShellProps {
   /** Optional top bar (app name, screen title, date) */
@@ -43,7 +49,7 @@ export interface AppShellProps {
   scrollContent?: boolean
 }
 
-const SIDEBAR_WIDTH = 20
+const DEFAULT_SIDEBAR_WIDTH = 20
 
 export function AppShell({
   topBar,
@@ -54,9 +60,41 @@ export function AppShell({
   sidebarPosition = 'flow',
   scrollContent = false,
 }: AppShellProps) {
-  const { columns: detectedColumns, rows } = useWindowSize()
-  const columns = columnsOverride ?? detectedColumns ?? LAYOUT.medium
   const theme = useTheme()
+  const overrides = componentOverrides(theme, 'appShell')
+  const { columns: detectedColumns, rows } = useWindowSize()
+  const narrowColumns = componentLayoutNumber(
+    theme,
+    'appShell',
+    'narrowColumns',
+    theme.layout?.narrowColumns ?? LAYOUT.narrow,
+  )
+  const mediumColumns = componentLayoutNumber(
+    theme,
+    'appShell',
+    'mediumColumns',
+    theme.layout?.mediumColumns ?? LAYOUT.medium,
+  )
+  const sidebarWidth = componentLayoutNumber(
+    theme,
+    'appShell',
+    'sidebarWidth',
+    theme.layout?.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH,
+  )
+  const columns = columnsOverride ?? detectedColumns ?? mediumColumns
+  const topBarMarginBottom =
+    overrides?.spacing?.topBarMarginBottom ?? theme.spacing.sm
+  const statusBarMarginTop =
+    overrides?.spacing?.statusBarMarginTop ?? theme.spacing.sm
+  const statusBarBorderStyle = (overrides?.borderStyle ??
+    componentLayoutString(
+      theme,
+      'appShell',
+      'statusBarBorderStyle',
+      theme.layout?.statusBarBorderStyle ?? 'single',
+    )) as BoxProps['borderStyle']
+  const statusBarBorderColor =
+    overrides?.colors?.statusBarBorder ?? theme.colors.border.default
   const contentZoneId = useId()
   const { ZoneProvider: ContentZoneProvider } = useFocusZone(contentZoneId, {
     scope: 'navigation',
@@ -64,8 +102,8 @@ export function AppShell({
     order: 1,
   })
 
-  const isNarrow = columns < LAYOUT.narrow
-  const isWide = columns >= LAYOUT.medium
+  const isNarrow = columns < narrowColumns
+  const isWide = columns >= mediumColumns
   const showSidebar = sidebar != null && !isNarrow
   const isFixedSidebar = sidebarPosition === 'fixed' && showSidebar
   // Opt-in scrolling constrains the shell whenever the sidebar is fixed, even
@@ -160,7 +198,7 @@ export function AppShell({
         overflow={isScrollable ? 'hidden' : undefined}
       >
         {topBar != null && (
-          <MouseLayout marginBottom={theme.spacing.sm}>{topBar}</MouseLayout>
+          <MouseLayout marginBottom={topBarMarginBottom}>{topBar}</MouseLayout>
         )}
 
         <MouseLayout
@@ -172,7 +210,7 @@ export function AppShell({
           {showSidebar && (
             <MouseLayout
               position="absolute"
-              width={SIDEBAR_WIDTH}
+              width={sidebarWidth}
               top={0}
               left={0}
             >
@@ -185,7 +223,7 @@ export function AppShell({
               flexGrow={1}
               flexShrink={1}
               minHeight={0}
-              marginLeft={showSidebar ? SIDEBAR_WIDTH : 0}
+              marginLeft={showSidebar ? sidebarWidth : 0}
               overflow="hidden"
               onWheel={(direction) =>
                 scrollBy(direction === 'down' ? scrollStep : -scrollStep)
@@ -203,7 +241,7 @@ export function AppShell({
           ) : (
             <MouseLayout
               flexGrow={1}
-              marginLeft={showSidebar ? SIDEBAR_WIDTH : 0}
+              marginLeft={showSidebar ? sidebarWidth : 0}
             >
               <ContentZoneProvider>{children}</ContentZoneProvider>
             </MouseLayout>
@@ -212,9 +250,9 @@ export function AppShell({
 
         {statusBar != null && (
           <MouseLayout
-            marginTop={theme.spacing.sm}
-            borderStyle="single"
-            borderColor={theme.colors.border.default}
+            marginTop={statusBarMarginTop}
+            borderStyle={statusBarBorderStyle}
+            borderColor={statusBarBorderColor}
           >
             {statusBar}
           </MouseLayout>
@@ -227,7 +265,7 @@ export function AppShell({
   return (
     <MouseLayout flexDirection="column">
       {topBar != null && (
-        <MouseLayout marginBottom={theme.spacing.sm}>{topBar}</MouseLayout>
+        <MouseLayout marginBottom={topBarMarginBottom}>{topBar}</MouseLayout>
       )}
 
       <MouseLayout
@@ -235,7 +273,7 @@ export function AppShell({
         gap={isWide ? theme.spacing.xs : 0}
       >
         {showSidebar && (
-          <MouseLayout width={isWide ? SIDEBAR_WIDTH : undefined} flexShrink={0}>
+          <MouseLayout width={isWide ? sidebarWidth : undefined} flexShrink={0}>
             {sidebar}
           </MouseLayout>
         )}
@@ -246,9 +284,9 @@ export function AppShell({
 
       {statusBar != null && (
         <MouseLayout
-          marginTop={theme.spacing.sm}
-          borderStyle="single"
-          borderColor={theme.colors.border.default}
+          marginTop={statusBarMarginTop}
+          borderStyle={statusBarBorderStyle}
+          borderColor={statusBarBorderColor}
         >
           {statusBar}
         </MouseLayout>

@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../../components/primitives/themeOverrides.js'
 import { useActiveActions } from '../actions/ScopedActionRegistryProvider.js'
 import type { FocusScope } from '../../types.js'
 
@@ -25,6 +26,9 @@ export function HotkeyHintBar({
   maxHints = 8,
 }: HotkeyHintBarProps) {
   const theme = useTheme()
+  const overrides = componentOverrides(theme, 'hotkeyHintBar')
+  const gap = overrides?.spacing?.gap ?? theme.spacing.sm
+  const color = overrides?.colors?.text ?? theme.colors.text.secondary
   const actions = useActiveActions()
 
   const filtered = scope
@@ -45,14 +49,11 @@ export function HotkeyHintBar({
   }
 
   return (
-    <Box flexDirection="row" gap={theme.spacing.sm}>
+    <Box flexDirection="row" gap={gap}>
       {visible.map((action) => {
         const keyLabel = resolveKey(action)
         return (
-          <Text
-            key={action.id}
-            color={theme.colors.text.secondary}
-          >
+          <Text key={action.id} color={color}>
             [{keyLabel}] {action.label}
           </Text>
         )

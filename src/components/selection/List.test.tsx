@@ -10,9 +10,14 @@ import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { List, type ListItem } from './List.js'
 import type { ReactElement } from 'react'
+import type { ThemeOverrides } from '../../types.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(<ThemeProvider theme={theme}>{ui}</ThemeProvider>)
 }
 
 const interactionRegistry = new ScreenRegistry()
@@ -662,5 +667,68 @@ describe('List', () => {
     )
     const frame = lastFrame()
     expect(frame).toContain('(f:false s:true)')
+  })
+})
+
+describe('List theme integration', () => {
+  const themeItems: ListItem[] = Array.from({ length: 5 }, (_, i) => ({
+    id: `theme-${i}`,
+    label: `Theme item ${i}`,
+  }))
+
+  it('applies the global list marker to the selected row', () => {
+    const { lastFrame } = renderWithTheme(
+      { symbols: { list: { marker: '▸' } } },
+      <KeyboardScopeProvider defaultScope="list">
+        <List items={sampleItems} selectedId="b" />
+      </KeyboardScopeProvider>,
+    )
+    expect(lastFrame()).toContain('▸ Item Beta')
+  })
+
+  it('applies the global listMaxVisible layout token', () => {
+    const { lastFrame } = renderWithTheme(
+      { layout: { listMaxVisible: 2 } },
+      <KeyboardScopeProvider defaultScope="list">
+        <List items={themeItems} />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('Theme item 0')
+    expect(frame).toContain('Theme item 1')
+    expect(frame).not.toContain('Theme item 2')
+  })
+
+  it('lets component layout and symbols override global tokens', () => {
+    const { lastFrame } = renderWithTheme(
+      {
+        symbols: { list: { marker: '▸' } },
+        layout: { listMaxVisible: 3 },
+        components: {
+          list: {
+            layout: { maxVisible: 1 },
+            symbols: { marker: '→' },
+          },
+        },
+      },
+      <KeyboardScopeProvider defaultScope="list">
+        <List items={themeItems} selectedId="theme-0" />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('→ Theme item 0')
+    expect(frame).not.toContain('Theme item 1')
+    expect(frame).not.toContain('▸')
+  })
+
+  it('keeps the default marker and visible window without a theme', () => {
+    const { lastFrame } = renderInTheme(
+      <KeyboardScopeProvider defaultScope="list">
+        <List items={themeItems} selectedId="theme-0" />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('• Theme item 0')
+    expect(frame).toContain('Theme item 4')
   })
 })

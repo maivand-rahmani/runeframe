@@ -8,6 +8,10 @@ import {
 } from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useShellSuspension } from '../../interaction/keyboard/KeyboardScopeProvider.js'
 import { useRegisterActions } from '../../commands/actions/ScopedActionRegistryProvider.js'
@@ -49,7 +53,15 @@ export function ChoicePrompt<T>({
   onCancel,
   label,
 }: ChoicePromptProps<T>) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'choicePrompt')
+  const labelMarginBottom = componentLayoutNumber(
+    theme,
+    'choicePrompt',
+    'labelMarginBottom',
+    theme.layout?.choicePromptMarginBottom ?? 1,
+  )
+  const labelColor = overrides?.colors?.label ?? theme.colors.text.primary
   const { suspend, restore } = useShellSuspension()
   const mouseGeometry = useMouseGeometry()
   const mouseRegistry = useMouseRegistry()
@@ -226,8 +238,8 @@ export function ChoicePrompt<T>({
   return (
     <MouseLayout flexDirection="column">
       {label && (
-        <Box marginBottom={1}>
-          <Text bold color={colors.text.primary}>
+        <Box marginBottom={labelMarginBottom}>
+          <Text bold color={labelColor}>
             {label}
           </Text>
         </Box>
@@ -263,23 +275,32 @@ function ChoicePromptRow<T>({
   autoMouseEnabled: boolean
   onClick: () => void
 }) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'choicePrompt')
+  const descriptionIndent = ' '.repeat(
+    overrides?.spacing?.descriptionIndent ?? theme.spacing.sm,
+  )
+  const mutedColor = overrides?.colors?.disabled ?? theme.colors.text.muted
+  const secondaryColor = overrides?.colors?.key ?? theme.colors.text.secondary
+  const primaryColor = overrides?.colors?.label ?? theme.colors.text.primary
+  const activeColor = overrides?.colors?.active ?? theme.colors.focus.active
+  const selectedColor = overrides?.colors?.hovered ?? theme.colors.focus.selected
   const [hovered, setHovered] = useState(false)
   const disabled = Boolean(item.disabled)
   const keyColor = disabled
-    ? colors.text.muted
+    ? mutedColor
     : active
-      ? colors.focus.active
+      ? activeColor
       : hovered
-        ? colors.focus.selected
-        : colors.text.secondary
+        ? selectedColor
+        : secondaryColor
   const labelColor = disabled
-    ? colors.text.muted
+    ? mutedColor
     : active
-      ? colors.focus.active
+      ? activeColor
       : hovered
-        ? colors.focus.selected
-        : colors.text.primary
+        ? selectedColor
+        : primaryColor
   const rowContents = (
     <>
       <Box>
@@ -302,8 +323,8 @@ function ChoicePromptRow<T>({
       </Box>
       {item.description && !disabled && (
         <Box>
-          <Text color={colors.text.muted}>
-            {'  '}
+          <Text color={mutedColor}>
+            {descriptionIndent}
             {item.description}
           </Text>
         </Box>

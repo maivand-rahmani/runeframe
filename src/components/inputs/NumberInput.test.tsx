@@ -6,12 +6,17 @@ import { NumberInput } from './NumberInput.js'
 import type { ReactElement } from 'react'
 import stripAnsi from 'strip-ansi'
 import chalk from 'chalk'
+import type { ThemeOverrides } from '../../types.js'
 import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(<ThemeProvider theme={theme}>{ui}</ThemeProvider>)
 }
 
 const mouseRegistry = new ScreenRegistry()
@@ -339,5 +344,62 @@ describe('NumberInput', () => {
     stdin.write('\u001B[A')
     await delay()
     expect(onChange).toHaveBeenCalledWith(11)
+  })
+})
+
+describe('NumberInput theme integration', () => {
+  it('applies global input symbols', () => {
+    const { lastFrame } = renderWithTheme(
+      { symbols: { input: { open: '«', close: '»', separator: '┃' } } },
+      <KeyboardScopeProvider defaultScope="textinput">
+        <NumberInput value={5} />
+      </KeyboardScopeProvider>,
+    )
+    expect(stripAnsi(lastFrame() ?? '')).toContain('« 5 ┃»')
+  })
+
+  it('lets component symbols override global input symbols', () => {
+    const { lastFrame } = renderWithTheme(
+      {
+        symbols: { input: { open: '«', close: '»' } },
+        components: { numberInput: { symbols: { open: '(', close: ')' } } },
+      },
+      <KeyboardScopeProvider defaultScope="textinput">
+        <NumberInput value={7} />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(stripAnsi(frame)).toContain('( 7 |)')
+    expect(frame).not.toContain('«')
+    expect(frame).not.toContain('»')
+  })
+
+  it('applies component color overrides to the ring and value', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      {
+        components: {
+          numberInput: { colors: { ring: 'magenta', value: 'green' } },
+        },
+      },
+      <KeyboardScopeProvider defaultScope="textinput">
+        <NumberInput value={3} />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('\u001B[35m')
+    expect(frame).toContain('\u001B[32m')
+  })
+
+  it('keeps the default symbols and colors without a theme', () => {
+    chalk.level = 1
+    const { lastFrame } = renderInTheme(
+      <KeyboardScopeProvider defaultScope="textinput">
+        <NumberInput value={1} />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(stripAnsi(frame)).toContain('[ 1 |]')
+    expect(frame).toContain('\u001B[36m')
   })
 })

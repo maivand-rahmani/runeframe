@@ -1,6 +1,10 @@
 import { Box, Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
 import { LAYOUT } from '../../constants.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from '../primitives/themeOverrides.js'
 
 export interface TopBarProps {
   appName: string
@@ -23,17 +27,32 @@ export function TopBar({
   columns = LAYOUT.narrow + 1,
 }: TopBarProps) {
   const theme = useTheme()
-  const isCompact = columns < LAYOUT.narrow
+  const overrides = componentOverrides(theme, 'topBar')
+  const narrowColumns = componentLayoutNumber(
+    theme,
+    'topBar',
+    'narrowColumns',
+    theme.layout?.narrowColumns ?? LAYOUT.narrow,
+  )
+  const separator = overrides?.symbols?.separator ?? '\u2014'
+  const isCompact = columns < narrowColumns
 
   return (
     <Box flexDirection="row" justifyContent="space-between">
       <Box>
-        <Text bold color={theme.colors.text.primary}>
+        <Text
+          bold
+          color={overrides?.colors?.appName ?? theme.colors.text.primary}
+        >
           {appName}
         </Text>
         {screenTitle != null && !isCompact && (
-          <Text color={theme.colors.text.secondary}>
-            {' \u2014 '}
+          <Text
+            color={overrides?.colors?.screenTitle ?? theme.colors.text.secondary}
+          >
+            {' '}
+            {separator}
+            {' '}
             {screenTitle}
           </Text>
         )}
@@ -41,7 +60,9 @@ export function TopBar({
 
       {!isCompact && (
         <Box>
-          <Text color={theme.colors.text.muted}>{formatDate()}</Text>
+          <Text color={overrides?.colors?.date ?? theme.colors.text.muted}>
+            {formatDate()}
+          </Text>
         </Box>
       )}
     </Box>

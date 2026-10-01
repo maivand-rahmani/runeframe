@@ -9,9 +9,14 @@ import chalk from 'chalk'
 import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
+import type { ThemeOverrides } from '../../types.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(<ThemeProvider theme={theme}>{ui}</ThemeProvider>)
 }
 
 const mouseRegistry = new ScreenRegistry()
@@ -318,5 +323,69 @@ describe('CommandInput', () => {
     await delay()
     expect(onChange).toHaveBeenCalledWith('x')
     expect(onSubmit).not.toHaveBeenCalled()
+  })
+})
+
+describe('CommandInput theme integration', () => {
+  it('applies the component prompt symbol override', () => {
+    const { lastFrame } = renderWithTheme(
+      { components: { commandInput: { symbols: { prompt: '»' } } } },
+      <KeyboardScopeProvider defaultScope="command">
+        <CommandInput
+          mode="command"
+          value=""
+          onChange={() => {}}
+          onSubmit={() => {}}
+        />
+      </KeyboardScopeProvider>,
+    )
+    expect(stripAnsi(lastFrame() ?? '')).toContain('» |')
+  })
+
+  it('applies the global input separator as the cursor', () => {
+    const { lastFrame } = renderWithTheme(
+      { symbols: { input: { separator: '▏' } } },
+      <KeyboardScopeProvider defaultScope="command">
+        <CommandInput
+          mode="command"
+          value=""
+          onChange={() => {}}
+          onSubmit={() => {}}
+        />
+      </KeyboardScopeProvider>,
+    )
+    expect(stripAnsi(lastFrame() ?? '')).toContain('▏')
+  })
+
+  it('lets the prompt prop win over the themed prompt symbol', () => {
+    const { lastFrame } = renderWithTheme(
+      { components: { commandInput: { symbols: { prompt: '»' } } } },
+      <KeyboardScopeProvider defaultScope="command">
+        <CommandInput
+          mode="command"
+          value=""
+          onChange={() => {}}
+          onSubmit={() => {}}
+          prompt="$"
+        />
+      </KeyboardScopeProvider>,
+    )
+    const frame = stripAnsi(lastFrame() ?? '')
+    expect(frame).toContain('$')
+    expect(frame).not.toContain('»')
+  })
+
+  it('keeps the default prompt and cursor without a theme', () => {
+    const { lastFrame } = renderInTheme(
+      <KeyboardScopeProvider defaultScope="command">
+        <CommandInput
+          mode="command"
+          value=""
+          onChange={() => {}}
+          onSubmit={() => {}}
+        />
+      </KeyboardScopeProvider>,
+    )
+    expect(stripAnsi(lastFrame() ?? '')).toContain('> |')
   })
 })

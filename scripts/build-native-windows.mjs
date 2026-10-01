@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * NativeAOT build for the production Windows input helper.
  *

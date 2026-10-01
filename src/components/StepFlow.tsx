@@ -6,7 +6,8 @@ import { MouseLayout } from '../interaction/mouse/MouseLayout.js'
 import { useAutoMouseArea } from '../interaction/mouse/useAutoMouseArea.js'
 import { useMouseGeometry } from '../interaction/mouse/MouseGeometryContext.js'
 import { useMouseRegistry } from '../interaction/mouse/MouseProvider.js'
-import { semanticColors } from '../design-system/tokens.js'
+import { useTheme } from '../design-system/ThemeProvider.js'
+import { componentOverrides } from './primitives/themeOverrides.js'
 
 function StepActionTarget({
   onClick,
@@ -101,6 +102,21 @@ export function StepFlow({
   onComplete,
   onCancel,
 }: StepFlowProps) {
+  const theme = useTheme()
+  const overrides = componentOverrides(theme, 'stepFlow')
+  const actionColor = overrides?.colors?.hovered ?? theme.colors.focus.ring
+  const buttonOpen = overrides?.symbols?.open ?? theme.symbols?.button.open ?? '['
+  const buttonClose =
+    overrides?.symbols?.close ?? theme.symbols?.button.close ?? ']'
+  const backSymbol =
+    overrides?.symbols?.back ?? theme.symbols?.stepFlow.back ?? '[←]'
+  const nextSymbol =
+    overrides?.symbols?.next ?? theme.symbols?.stepFlow.next ?? '[→/Enter]'
+  // The last step has no Enter shortcut, so the historical label omits the
+  // `/Enter` segment (e.g. `[→] Finish`).
+  const finishSymbol = nextSymbol.includes('/Enter')
+    ? nextSymbol.replace('/Enter', '')
+    : nextSymbol
   const [currentStepIndex, setCurrentStepIndex] = useState(0)
   const [data, setDataState] = useState<Record<string, unknown>>(initialData ?? {})
 
@@ -205,11 +221,11 @@ export function StepFlow({
           <StepActionTarget onClick={goBack}>
             {(hovered) => (
               <Text
-                color={hovered ? semanticColors.focus.ring : undefined}
+                color={hovered ? actionColor : undefined}
                 dimColor={!hovered}
                 underline={hovered}
               >
-                [esc] Cancel
+                {buttonOpen}esc{buttonClose} Cancel
               </Text>
             )}
           </StepActionTarget>
@@ -217,11 +233,11 @@ export function StepFlow({
           <StepActionTarget onClick={goBack}>
             {(hovered) => (
               <Text
-                color={hovered ? semanticColors.focus.ring : undefined}
+                color={hovered ? actionColor : undefined}
                 dimColor={!hovered}
                 underline={hovered}
               >
-                [←] Back
+                {backSymbol} Back
               </Text>
             )}
           </StepActionTarget>
@@ -230,11 +246,11 @@ export function StepFlow({
         <StepActionTarget onClick={goNext}>
           {(hovered) => (
             <Text
-              color={hovered ? semanticColors.focus.ring : undefined}
+              color={hovered ? actionColor : undefined}
               dimColor={!hovered}
               underline={hovered}
             >
-              [→{isLast || steps.length === 0 ? '' : '/Enter'}]{' '}
+              {isLast || steps.length === 0 ? finishSymbol : nextSymbol}{' '}
               {isLast ? 'Finish' : 'Next'}
             </Text>
           )}

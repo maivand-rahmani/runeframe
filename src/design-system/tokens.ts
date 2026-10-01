@@ -2,6 +2,8 @@
 // Source of truth for all visual primitives in the TUI.
 // Everything derives from these base values — no raw numbers or inline colors.
 
+import type { ThemeLayout, ThemeSymbols } from '../types.js'
+
 // ── Spacing (character-based) ──
 export const spacing = {
   xs: 1,
@@ -63,6 +65,41 @@ export const borderStyles = {
   modal: 'round',
   table: 'single',
 } as const satisfies Record<string, string>
+
+// ── Theme Symbols ──
+// Decorative glyphs used by built-in widgets. These defaults mirror the
+// historical hard-coded rendering; overriding them must not change layout.
+export const themeSymbols: ThemeSymbols = {
+  button: { open: '[', close: ']' },
+  badge: { open: '[', close: ']' },
+  divider: { horizontal: '─' },
+  list: { marker: '•' },
+  radioList: { selected: '•', unselected: '○' },
+  sidebar: { active: '›', item: '•' },
+  tabs: { separator: '|' },
+  input: { open: '[', close: ']', separator: '|' },
+  stepFlow: { back: '[←]', next: '[→/Enter]' },
+}
+
+// ── Theme Layout ──
+// Layout metrics used by the built-in shell and widgets. Defaults preserve
+// the historical fixed values.
+export const themeLayout: ThemeLayout = {
+  narrowColumns: 80,
+  mediumColumns: 100,
+  sidebarMaxItems: 8,
+  listMaxVisible: 10,
+  sidebarWidth: 20,
+  dividerWidth: 28,
+  modalPaddingX: 1,
+  modalPaddingY: 1,
+  modalMarginY: 1,
+  statusBarBorderStyle: 'single',
+  modalBorderStyle: 'round',
+  commandPaletteBorderStyle: 'round',
+  debugInspectorBorderStyle: 'single',
+  choicePromptMarginBottom: 1,
+}
 
 // ── Derived Types ──
 export type SpacingToken = keyof typeof spacing

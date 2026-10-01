@@ -5,6 +5,7 @@ import { useTheme } from '../../design-system/ThemeProvider.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { InputConsumptionResult } from '../../types.js'
 import type { Action } from '../../commands/actions/ActionRegistry.js'
+import { componentOverrides } from '../primitives/themeOverrides.js'
 
 export interface ConfirmCancelProps {
   title: string
@@ -25,7 +26,12 @@ export function ConfirmCancel({
   onCancel,
   danger,
 }: ConfirmCancelProps) {
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const { colors } = theme
+  const overrides = componentOverrides(theme, 'confirmCancel')
+  const messageColor = danger
+    ? overrides?.colors?.danger ?? colors.status.error
+    : overrides?.colors?.message ?? colors.text.primary
   const onConfirmRef = useRef(onConfirm)
   onConfirmRef.current = onConfirm
   const onCancelRef = useRef(onCancel)
@@ -66,9 +72,7 @@ export function ConfirmCancel({
 
   return (
     <ModalDialog title={title} onClose={onCancel} footer={footer}>
-      <Text color={danger ? colors.status.error : colors.text.primary}>
-        {message}
-      </Text>
+      <Text color={messageColor}>{message}</Text>
     </ModalDialog>
   )
 }

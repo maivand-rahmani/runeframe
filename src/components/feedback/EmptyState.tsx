@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Box, Text } from 'ink'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../primitives/themeOverrides.js'
 
 export interface EmptyStateProps {
   title: string
@@ -16,26 +17,35 @@ export function EmptyState({
   action,
 }: EmptyStateProps) {
   const theme = useTheme()
+  const overrides = componentOverrides(theme, 'emptyState')
 
   return (
     <Box flexDirection="column">
-      <Box marginBottom={theme.spacing.xs}>
-        <Text bold color={theme.colors.text.primary}>
+      <Box
+        marginBottom={overrides?.spacing?.titleMarginBottom ?? theme.spacing.xs}
+      >
+        <Text bold color={overrides?.colors?.title ?? theme.colors.text.primary}>
           {title}
         </Text>
       </Box>
 
-      <Text color={theme.colors.text.secondary}>{description}</Text>
+      <Text color={overrides?.colors?.description ?? theme.colors.text.secondary}>
+        {description}
+      </Text>
 
       {hint != null && (
-        <Box marginTop={theme.spacing.xs}>
-          <Text color={theme.colors.text.muted} italic>
+        <Box marginTop={overrides?.spacing?.hintMarginTop ?? theme.spacing.xs}>
+          <Text color={overrides?.colors?.hint ?? theme.colors.text.muted} italic>
             {hint}
           </Text>
         </Box>
       )}
 
-      {action != null && <Box marginTop={theme.spacing.sm}>{action}</Box>}
+      {action != null && (
+        <Box marginTop={overrides?.spacing?.actionMarginTop ?? theme.spacing.sm}>
+          {action}
+        </Box>
+      )}
     </Box>
   )
 }

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Box, Text } from 'ink'
 import type { Boxes } from 'cli-boxes'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from './themeOverrides.js'
 
 export interface PanelProps {
   title?: string
@@ -10,17 +11,23 @@ export interface PanelProps {
 
 export function Panel({ title, children }: PanelProps) {
   const theme = useTheme()
-  const borderStyle = theme.borderStyles.panel as keyof Boxes
+  const overrides = componentOverrides(theme, 'panel')
+  const borderStyle = (overrides?.borderStyle ??
+    theme.borderStyles.panel) as keyof Boxes
 
   return (
     <Box
       borderStyle={borderStyle}
-      borderColor={theme.colors.border.default}
+      borderColor={overrides?.colors?.border ?? theme.colors.border.default}
       flexDirection="column"
-      paddingX={theme.spacing.sm}
+      paddingX={overrides?.spacing?.paddingX ?? theme.spacing.sm}
     >
       {title != null && (
-        <Box marginBottom={theme.spacing.xs}>
+        <Box
+          marginBottom={
+            overrides?.spacing?.titleMarginBottom ?? theme.spacing.xs
+          }
+        >
           <Text bold>{title}</Text>
         </Box>
       )}

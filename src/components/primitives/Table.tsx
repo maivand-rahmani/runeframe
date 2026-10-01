@@ -2,9 +2,14 @@ import { Box, Text } from 'ink'
 import type { Boxes } from 'cli-boxes'
 import { useTheme } from '../../design-system/ThemeProvider.js'
 import { LAYOUT } from '../../constants.js'
+import {
+  componentLayoutNumber,
+  componentOverrides,
+} from './themeOverrides.js'
 
 const BORDER_WIDTH = 2
 const MIN_COLUMN_WIDTH = 1
+const COLUMN_GAP = 1
 
 type ColumnKey<T extends Record<string, unknown>> = Extract<keyof T, string>
 
@@ -25,8 +30,9 @@ export interface TableProps<T extends Record<string, unknown>> {
 function getVisibleColumns<T extends Record<string, unknown>>(
   columns: Column<T>[],
   width?: number,
+  mediumColumns: number = LAYOUT.medium,
 ): Column<T>[] {
-  if (width == null || width >= LAYOUT.medium) {
+  if (width == null || width >= mediumColumns) {
     return columns
   }
 
@@ -134,30 +140,54 @@ export function Table<T extends Record<string, unknown>>({
   width,
 }: TableProps<T>) {
   const theme = useTheme()
-  const borderStyle = theme.borderStyles.table as keyof Boxes
-  const visibleColumns = getVisibleColumns(columns, width)
-  const gapWidth = Math.max(visibleColumns.length - 1, 0)
-  const horizontalPadding = theme.spacing.xs * 2
+  const overrides = componentOverrides(theme, 'table')
+  const borderStyle = (overrides?.borderStyle ??
+    theme.borderStyles.table) as keyof Boxes
+  const borderWidth = Math.max(
+    0,
+    componentLayoutNumber(theme, 'table', 'borderWidth', BORDER_WIDTH),
+  )
+  const mediumColumns = componentLayoutNumber(
+    theme,
+    'table',
+    'mediumColumns',
+    theme.layout?.mediumColumns ?? LAYOUT.medium,
+  )
+  const paddingX = overrides?.spacing?.paddingX ?? theme.spacing.xs
+  const columnGap = Math.max(
+    0,
+    componentLayoutNumber(theme, 'table', 'columnGap', COLUMN_GAP),
+  )
+  const visibleColumns = getVisibleColumns(columns, width, mediumColumns)
+  const gapWidth = Math.max(visibleColumns.length - 1, 0) * columnGap
+  const horizontalPadding = paddingX * 2
   const availableCellWidth =
     width == null
       ? undefined
       : Math.max(
-          width - BORDER_WIDTH - horizontalPadding - gapWidth,
+          width - borderWidth - horizontalPadding - gapWidth,
           visibleColumns.length,
         )
   const columnWidths = allocateColumnWidths(visibleColumns, availableCellWidth)
+  const titleColor = overrides?.colors?.title ?? theme.colors.text.primary
+  const headerColor = overrides?.colors?.header ?? theme.colors.text.secondary
+  const cellColor = overrides?.colors?.cell ?? theme.colors.text.primary
 
   return (
     <Box
       borderStyle={borderStyle}
-      borderColor={theme.colors.border.default}
+      borderColor={overrides?.colors?.border ?? theme.colors.border.default}
       flexDirection="column"
-      paddingX={theme.spacing.xs}
+      paddingX={paddingX}
       width={width}
     >
       {title != null && (
-        <Box marginBottom={theme.spacing.xs}>
-          <Text bold color={theme.colors.text.primary}>
+        <Box
+          marginBottom={
+            overrides?.spacing?.titleMarginBottom ?? theme.spacing.xs
+          }
+        >
+          <Text bold color={titleColor}>
             {title}
           </Text>
         </Box>
@@ -171,10 +201,10 @@ export function Table<T extends Record<string, unknown>>({
             return (
               <Box
                 key={`header-${String(column.key)}`}
-                marginRight={isLastColumn ? 0 : 1}
+                marginRight={isLastColumn ? 0 : columnGap}
                 width={columnWidths[index]}
               >
-                <Text bold color={theme.colors.text.secondary} wrap="truncate">
+                <Text bold color={headerColor} wrap="truncate">
                   {column.label}
                 </Text>
               </Box>
@@ -190,10 +220,10 @@ export function Table<T extends Record<string, unknown>>({
               return (
                 <Box
                   key={`cell-${rowIndex}-${String(column.key)}`}
-                  marginRight={isLastColumn ? 0 : 1}
+                  marginRight={isLastColumn ? 0 : columnGap}
                   width={columnWidths[columnIndex]}
                 >
-                  <Text color={theme.colors.text.primary} wrap="truncate">
+                  <Text color={cellColor} wrap="truncate">
                     {formatCellValue(row[column.key])}
                   </Text>
                 </Box>

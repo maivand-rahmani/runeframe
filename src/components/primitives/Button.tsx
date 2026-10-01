@@ -9,6 +9,7 @@ import { useMouseGeometry } from '../../interaction/mouse/MouseGeometryContext.j
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { InputConsumptionResult } from '../../types.js'
+import { componentOverrides } from './themeOverrides.js'
 
 export type ButtonVariant = 'default' | 'primary' | 'danger' | 'ghost'
 
@@ -35,16 +36,18 @@ export function resolveButtonAppearance(
   disabled: boolean,
   hovered = false,
 ): ButtonAppearance {
+  const overrides = componentOverrides(theme, 'button')
+
   if (disabled) {
     return {
-      color: theme.colors.text.secondary,
+      color: overrides?.colors?.disabled ?? theme.colors.text.secondary,
       dimColor: true,
     }
   }
 
   if (focused) {
     return {
-      color: theme.colors.focus.ring,
+      color: overrides?.colors?.focused ?? theme.colors.focus.ring,
       bold: true,
       ...(hovered ? { underline: true } : {}),
     }
@@ -52,7 +55,7 @@ export function resolveButtonAppearance(
 
   if (hovered) {
     return {
-      color: theme.colors.focus.ring,
+      color: overrides?.colors?.hovered ?? theme.colors.focus.ring,
       bold: true,
       underline: true,
     }
@@ -60,14 +63,17 @@ export function resolveButtonAppearance(
 
   switch (variant) {
     case 'primary':
-      return { color: theme.colors.status.info }
+      return { color: overrides?.colors?.primary ?? theme.colors.status.info }
     case 'danger':
-      return { color: theme.colors.status.error }
+      return { color: overrides?.colors?.danger ?? theme.colors.status.error }
     case 'ghost':
-      return { color: theme.colors.text.secondary, dimColor: true }
+      return {
+        color: overrides?.colors?.ghost ?? theme.colors.text.secondary,
+        dimColor: true,
+      }
     case 'default':
     default:
-      return { color: theme.colors.text.primary }
+      return { color: overrides?.colors?.default ?? theme.colors.text.primary }
   }
 }
 
@@ -89,6 +95,15 @@ export function Button({
     hovered,
   )
 
+  const openSymbol =
+    componentOverrides(theme, 'button')?.symbols?.open ??
+    theme.symbols?.button.open ??
+    '['
+  const closeSymbol =
+    componentOverrides(theme, 'button')?.symbols?.close ??
+    theme.symbols?.button.close ??
+    ']'
+
   const content = (
     <Text
       color={appearance.color}
@@ -96,7 +111,9 @@ export function Button({
       bold={appearance.bold}
       underline={appearance.underline}
     >
-      [{children}]
+      {openSymbol}
+      {children}
+      {closeSymbol}
     </Text>
   )
 

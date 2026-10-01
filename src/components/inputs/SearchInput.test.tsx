@@ -9,9 +9,14 @@ import chalk from 'chalk'
 import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
+import type { ThemeOverrides } from '../../types.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(<ThemeProvider theme={theme}>{ui}</ThemeProvider>)
 }
 
 const mouseRegistry = new ScreenRegistry()
@@ -286,5 +291,52 @@ describe('SearchInput', () => {
     stdin.write('x')
     await delay()
     expect(onChange).toHaveBeenCalledWith('x')
+  })
+})
+
+describe('SearchInput theme integration', () => {
+  it('applies the global input separator as the cursor', () => {
+    const { lastFrame } = renderWithTheme(
+      { symbols: { input: { separator: '▏' } } },
+      <KeyboardScopeProvider defaultScope="textinput">
+        <SearchInput value="query" />
+      </KeyboardScopeProvider>,
+    )
+    expect(stripAnsi(lastFrame() ?? '')).toContain('query▏')
+  })
+
+  it('lets the component separator override the global separator', () => {
+    const { lastFrame } = renderWithTheme(
+      {
+        symbols: { input: { separator: '▏' } },
+        components: { searchInput: { symbols: { separator: '│' } } },
+      },
+      <KeyboardScopeProvider defaultScope="textinput">
+        <SearchInput value="query" />
+      </KeyboardScopeProvider>,
+    )
+    const frame = lastFrame() ?? ''
+    expect(stripAnsi(frame)).toContain('query│')
+    expect(frame).not.toContain('▏')
+  })
+
+  it('applies the component cursor color override', () => {
+    chalk.level = 1
+    const { lastFrame } = renderWithTheme(
+      { components: { searchInput: { colors: { cursor: 'magenta' } } } },
+      <KeyboardScopeProvider defaultScope="textinput">
+        <SearchInput value="query" />
+      </KeyboardScopeProvider>,
+    )
+    expect(lastFrame()).toContain('\u001B[35m')
+  })
+
+  it('keeps the default cursor without a theme', () => {
+    const { lastFrame } = renderInTheme(
+      <KeyboardScopeProvider defaultScope="textinput">
+        <SearchInput value="query" />
+      </KeyboardScopeProvider>,
+    )
+    expect(stripAnsi(lastFrame() ?? '')).toContain('query|')
   })
 })

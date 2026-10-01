@@ -11,10 +11,21 @@ import { FrameworkProvider } from '../../FrameworkProvider.js'
 import { ScreenRegistry } from '../../screens/registry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { ChoicePrompt, type ChoiceItem } from './ChoicePrompt.js'
+import type { ThemeOverrides } from '../../types.js'
 
 function renderInTheme(ui: ReactElement) {
   return render(
     <ThemeProvider>
+      <KeyboardScopeProvider defaultScope="list">
+        <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
+      </KeyboardScopeProvider>
+    </ThemeProvider>,
+  )
+}
+
+function renderWithTheme(theme: ThemeOverrides, ui: ReactElement) {
+  return render(
+    <ThemeProvider theme={theme}>
       <KeyboardScopeProvider defaultScope="list">
         <ScopedActionRegistryProvider>{ui}</ScopedActionRegistryProvider>
       </KeyboardScopeProvider>
@@ -329,5 +340,68 @@ describe('ChoicePrompt', () => {
     stdin.write('\r')
     await delay()
     expect(selected).toEqual(['c', 'a'])
+  })
+})
+
+function plainLines(frame: string | undefined): string[] {
+  return (frame ?? '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/)
+}
+
+const themeItems: ChoiceItem<string>[] = [
+  { value: 'a', label: 'Alpha' },
+  { value: 'b', label: 'Beta' },
+]
+
+describe('ChoicePrompt theme integration', () => {
+  it('applies the global choicePromptMarginBottom layout token', () => {
+    const { lastFrame } = renderWithTheme(
+      { layout: { choicePromptMarginBottom: 3 } },
+      <ChoicePrompt label="Pick one" items={themeItems} onSelect={() => {}} />,
+    )
+    const lines = plainLines(lastFrame())
+    const labelLine = lines.findIndex((line) => line.includes('Pick one'))
+    const itemLine = lines.findIndex((line) => line.includes('a) Alpha'))
+    expect(labelLine).toBeGreaterThanOrEqual(0)
+    expect(itemLine - labelLine).toBe(4)
+  })
+
+  it('lets the component labelMarginBottom override the global layout token', () => {
+    const { lastFrame } = renderWithTheme(
+      {
+        layout: { choicePromptMarginBottom: 3 },
+        components: { choicePrompt: { layout: { labelMarginBottom: 0 } } },
+      },
+      <ChoicePrompt label="Pick one" items={themeItems} onSelect={() => {}} />,
+    )
+    const lines = plainLines(lastFrame())
+    const labelLine = lines.findIndex((line) => line.includes('Pick one'))
+    const itemLine = lines.findIndex((line) => line.includes('a) Alpha'))
+    expect(itemLine - labelLine).toBe(1)
+  })
+
+  it('applies component color overrides to the label and key', async () => {
+    await withColorOutput(async () => {
+      const { lastFrame } = renderWithTheme(
+        {
+          components: {
+            choicePrompt: { colors: { label: 'magenta', key: 'green' } },
+          },
+        },
+        <ChoicePrompt label="Pick one" items={themeItems} onSelect={() => {}} />,
+      )
+      const frame = lastFrame() ?? ''
+      expect(frame).toContain('\u001B[35m')
+      expect(frame).toContain('\u001B[32m')
+    })
+  })
+
+  it('keeps the default label spacing and colors without a theme', () => {
+    const { lastFrame } = renderInTheme(
+      <ChoicePrompt label="Pick one" items={themeItems} onSelect={() => {}} />,
+    )
+    const lines = plainLines(lastFrame())
+    const labelLine = lines.findIndex((line) => line.includes('Pick one'))
+    const itemLine = lines.findIndex((line) => line.includes('a) Alpha'))
+    expect(itemLine - labelLine).toBe(2)
   })
 })

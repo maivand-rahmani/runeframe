@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, type ReactElement } from 'react'
-import { Box, Text } from 'ink'
+import { Box, Text, type BoxProps } from 'ink'
 import { useKeyHandler } from '../../interaction/keyboard/useKeyHandler.js'
 import { useTheme } from '../../design-system/ThemeProvider.js'
+import { componentOverrides } from '../../components/primitives/themeOverrides.js'
 import type { ActionRegistry, ActionMatch } from '../actions/ActionRegistry.js'
 import { MouseLayout } from '../../interaction/mouse/MouseLayout.js'
 import { useAutoMouseArea } from '../../interaction/mouse/useAutoMouseArea.js'
@@ -18,7 +19,15 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const results = registry.search(query)
-  const { colors } = useTheme()
+  const theme = useTheme()
+  const { colors } = theme
+  const overrides = componentOverrides(theme, 'commandPalette')
+  const borderStyle = (overrides?.borderStyle ??
+    theme.layout?.commandPaletteBorderStyle ??
+    'round') as BoxProps['borderStyle']
+  const borderColor = overrides?.colors?.border ?? colors.border.default
+  const promptColor = overrides?.colors?.prompt ?? colors.focus.active
+  const selectedColor = overrides?.colors?.selected ?? colors.focus.active
   const mouseGeometry = useMouseGeometry()
   const mouseRegistry = useMouseRegistry()
   const autoMouseEnabled = mouseGeometry != null && mouseRegistry != null
@@ -89,11 +98,11 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
   return (
     <MouseLayout
       flexDirection="column"
-      borderStyle="round"
-      borderColor={colors.border.default}
+      borderStyle={borderStyle}
+      borderColor={borderColor}
     >
       <Box>
-        <Text bold color={colors.focus.active}>
+        <Text bold color={promptColor}>
           {'>'}
         </Text>
         <Text>{' '}</Text>
@@ -106,7 +115,7 @@ export function CommandPalette({ registry, onClose }: CommandPaletteProps) {
           selectedIndex,
           hoveredIndex,
           query,
-          colors,
+          selectedColor,
           autoMouseEnabled,
           setSelectedIndex,
           (index, hovered) => setHoveredIndex(hovered ? index : null),
@@ -121,7 +130,7 @@ function renderResults(
   selectedIndex: number,
   hoveredIndex: number | null,
   query: string,
-  colors: ReturnType<typeof useTheme>['colors'],
+  selectedColor: string,
   autoMouseEnabled: boolean,
   onSelect: (index: number) => void,
   onHoverChange: (index: number, hovered: boolean) => void,
@@ -146,7 +155,7 @@ function renderResults(
     const rowKey = `${match.action.id}:${resultIndex}`
     const rowContents = (
       <Text
-        color={isSelected ? colors.focus.active : undefined}
+        color={isSelected ? selectedColor : undefined}
         bold={isSelected}
         underline={isHovered}
       >

@@ -13,6 +13,7 @@ import type { DOMElement } from 'ink'
 import {
   ActionRegistry,
   AppShell,
+  Badge,
   Breadcrumbs,
   Button,
   ChoicePrompt,
@@ -39,6 +40,7 @@ import {
   StatusBar,
   StepFlow,
   Tabs,
+  ThemeProvider,
   TextInput,
   TopBar,
   useActiveActions,
@@ -60,11 +62,150 @@ import {
   type MouseDragEvent,
   type MousePointerEvent,
   type Step,
+  type ThemeSymbols,
+  type ThemeOverrides,
 } from 'runeframe'
 import { KeyboardRegistry, ScreenTransition } from 'runeframe/experimental'
 
-type RouteId = 'overview' | 'controls' | 'workflow' | 'runtime' | 'interactions'
+type RouteId =
+  | 'overview'
+  | 'controls'
+  | 'workflow'
+  | 'runtime'
+  | 'interactions'
+  | 'themes'
 type ThemeMode = 'dark' | 'light'
+type StudioPaletteId = 'cinder' | 'tide' | 'fern'
+type StudioDensity = 'compact' | 'comfortable' | 'spacious'
+type StudioSymbolSet = 'signal' | 'classic'
+
+interface StudioThemeExtensions {
+  studio: {
+    palette: StudioPaletteId
+    density: StudioDensity
+    symbolSet: StudioSymbolSet
+    preview: string
+  }
+}
+
+interface ThemeStudioState {
+  mode: ThemeMode
+  palette: StudioPaletteId
+  setPalette: (palette: StudioPaletteId) => void
+  density: StudioDensity
+  setDensity: (density: StudioDensity) => void
+  symbolSet: StudioSymbolSet
+  setSymbolSet: (symbolSet: StudioSymbolSet) => void
+}
+
+const ThemeStudioContext = createContext<ThemeStudioState | null>(null)
+
+const studioPalettes: Record<StudioPaletteId, {
+  label: string
+  dark: NonNullable<ThemeOverrides['colors']>
+  light: NonNullable<ThemeOverrides['colors']>
+}> = {
+  cinder: {
+    label: 'Cinder',
+    dark: {
+      text: { primary: 'white', secondary: 'gray', muted: 'gray', inverse: 'black' },
+      status: { success: 'green', warning: 'yellow', error: 'red', info: 'cyan' },
+      focus: { ring: 'cyan', active: 'cyan', selected: 'blue' },
+      surface: { base: 'black', elevated: 'gray', overlay: 'black' },
+      border: { default: 'gray', focus: 'cyan', error: 'red' },
+    },
+    light: {
+      text: { primary: 'black', secondary: 'gray', muted: 'gray', inverse: 'white' },
+      status: { success: 'green', warning: 'yellow', error: 'red', info: 'blue' },
+      focus: { ring: 'blue', active: 'blue', selected: 'cyan' },
+      surface: { base: 'white', elevated: 'white', overlay: 'white' },
+      border: { default: 'gray', focus: 'blue', error: 'red' },
+    },
+  },
+  tide: {
+    label: 'Tide',
+    dark: {
+      text: { primary: 'white', secondary: 'cyan', muted: 'gray', inverse: 'black' },
+      status: { success: 'green', warning: 'yellow', error: 'red', info: 'blue' },
+      focus: { ring: 'cyan', active: 'blue', selected: 'cyan' },
+      surface: { base: 'black', elevated: 'blue', overlay: 'black' },
+      border: { default: 'blue', focus: 'cyan', error: 'red' },
+    },
+    light: {
+      text: { primary: 'black', secondary: 'blue', muted: 'gray', inverse: 'white' },
+      status: { success: 'green', warning: 'yellow', error: 'red', info: 'blue' },
+      focus: { ring: 'blue', active: 'blue', selected: 'cyan' },
+      surface: { base: 'white', elevated: 'cyan', overlay: 'white' },
+      border: { default: 'blue', focus: 'blue', error: 'red' },
+    },
+  },
+  fern: {
+    label: 'Fern',
+    dark: {
+      text: { primary: 'white', secondary: 'green', muted: 'gray', inverse: 'black' },
+      status: { success: 'green', warning: 'yellow', error: 'red', info: 'cyan' },
+      focus: { ring: 'green', active: 'green', selected: 'cyan' },
+      surface: { base: 'black', elevated: 'green', overlay: 'black' },
+      border: { default: 'green', focus: 'green', error: 'red' },
+    },
+    light: {
+      text: { primary: 'black', secondary: 'green', muted: 'gray', inverse: 'white' },
+      status: { success: 'green', warning: 'yellow', error: 'red', info: 'blue' },
+      focus: { ring: 'green', active: 'green', selected: 'blue' },
+      surface: { base: 'white', elevated: 'green', overlay: 'white' },
+      border: { default: 'green', focus: 'green', error: 'red' },
+    },
+  },
+}
+
+// Each profile is a public symbol override, kept in one place so the preview
+// and the app-wide provider always change together.
+const studioSymbolProfiles: Record<StudioSymbolSet, ThemeSymbols> = {
+  signal: {
+    button: { open: '[', close: ']' },
+    badge: { open: '[', close: ']' },
+    divider: { horizontal: '─' },
+    list: { marker: '•' },
+    radioList: { selected: '•', unselected: '○' },
+    sidebar: { active: '›', item: '•' },
+    tabs: { separator: '|' },
+    input: { open: '[', close: ']', separator: '|' },
+    stepFlow: { back: '[←]', next: '[→/Enter]' },
+  },
+  classic: {
+    button: { open: '<', close: '>' },
+    badge: { open: '<', close: '>' },
+    divider: { horizontal: '─' },
+    list: { marker: '›' },
+    radioList: { selected: '◉', unselected: '○' },
+    sidebar: { active: '▸', item: '·' },
+    tabs: { separator: '·' },
+    input: { open: '<', close: '>', separator: '·' },
+    stepFlow: { back: '[←]', next: '[→/Enter]' },
+  },
+}
+
+function buildStudioTheme(
+  palette: StudioPaletteId,
+  density: StudioDensity,
+  symbolSet: StudioSymbolSet,
+  mode: ThemeMode,
+): ThemeOverrides {
+  const selectedPalette = studioPalettes[palette]
+  return {
+    colors: mode === 'dark' ? selectedPalette.dark : selectedPalette.light,
+    density,
+    symbols: studioSymbolProfiles[symbolSet],
+    extensions: {
+      studio: {
+        palette,
+        density,
+        symbolSet,
+        preview: 'shared preview',
+      },
+    },
+  }
+}
 
 interface InteractionTabState {
   activeTab: string
@@ -244,6 +385,12 @@ screenRegistry.register({
   component: () => <InteractionScreen />,
 })
 screenRegistry.register({
+  id: 'themes',
+  title: 'Theme Studio',
+  category: 'system',
+  component: () => <ThemeStudioScreen />,
+})
+screenRegistry.register({
   id: 'help-modal',
   title: 'Help',
   category: 'system',
@@ -289,9 +436,36 @@ export function ShowcaseApp({
   mouseEventSource,
 }: ShowcaseAppProps = {}) {
   const [themeMode, setThemeMode] = useState<ThemeMode>('dark')
+  const [studioPalette, setStudioPalette] = useState<StudioPaletteId>('cinder')
+  const [studioDensity, setStudioDensity] =
+    useState<StudioDensity>('comfortable')
+  const [studioSymbolSet, setStudioSymbolSet] =
+    useState<StudioSymbolSet>('signal')
   const toggleTheme = useCallback(() => {
     setThemeMode((mode) => (mode === 'dark' ? 'light' : 'dark'))
   }, [])
+  const appTheme = useMemo(
+    () =>
+      buildStudioTheme(
+        studioPalette,
+        studioDensity,
+        studioSymbolSet,
+        themeMode,
+      ),
+    [studioDensity, studioPalette, studioSymbolSet, themeMode],
+  )
+  const themeStudioState = useMemo(
+    () => ({
+      mode: themeMode,
+      palette: studioPalette,
+      setPalette: setStudioPalette,
+      density: studioDensity,
+      setDensity: setStudioDensity,
+      symbolSet: studioSymbolSet,
+      setSymbolSet: setStudioSymbolSet,
+    }),
+    [studioDensity, studioPalette, studioSymbolSet, themeMode],
+  )
 
   return (
     <MouseLayout origin={{ x: 0, y: 0 }} flexDirection="column">
@@ -299,10 +473,13 @@ export function ShowcaseApp({
         registry={screenRegistry}
         defaultScreen="overview"
         themeMode={themeMode}
+        theme={appTheme}
         mouseDiagnostics={mouseDiagnostics}
         mouseEventSource={mouseEventSource}
       >
-        <ShowcaseFrame themeMode={themeMode} onToggleTheme={toggleTheme} />
+        <ThemeStudioContext.Provider value={themeStudioState}>
+          <ShowcaseFrame themeMode={themeMode} onToggleTheme={toggleTheme} />
+        </ThemeStudioContext.Provider>
       </FrameworkProvider>
     </MouseLayout>
   )
@@ -997,12 +1174,15 @@ function OverviewScreen() {
               04  Input lab · Focus, keys, and mouse
             </Button>
           </MouseLayout>
-          <MouseLayout marginTop={1} flexDirection="row" gap={1}>
+          <MouseLayout marginTop={1} flexDirection="row" flexWrap="wrap" gap={1}>
             <Button
               variant="primary"
               onActivate={() => push('controls')}
             >
               Open control bench
+            </Button>
+            <Button variant="ghost" onActivate={() => push('themes')}>
+              Theme Studio
             </Button>
           </MouseLayout>
         </MeasuredPanel>
@@ -1014,6 +1194,151 @@ function OverviewScreen() {
         </Text>
       </MouseLayout>
     </MouseLayout>
+  )
+}
+
+function useThemeStudioState(): ThemeStudioState {
+  const state = useContext(ThemeStudioContext)
+  if (!state) {
+    throw new Error('Theme Studio controls must be used inside ShowcaseApp.')
+  }
+  return state
+}
+
+function ThemeStudioChoice({
+  active,
+  onActivate,
+  children,
+}: {
+  active: boolean
+  onActivate: () => void
+  children: ReactNode
+}) {
+  return (
+    <Button variant={active ? 'primary' : 'ghost'} onActivate={onActivate}>
+      {children}
+    </Button>
+  )
+}
+
+function ThemeStudioScreen() {
+  const {
+    mode,
+    palette,
+    setPalette,
+    density,
+    setDensity,
+    symbolSet,
+    setSymbolSet,
+  } = useThemeStudioState()
+  const theme = useTheme<StudioThemeExtensions>()
+  const extension = theme.extensions.studio
+
+  return (
+    <MouseLayout flexDirection="column">
+      <MouseLayout marginBottom={1}>
+        <Text bold color={theme.colors.focus.active}>THEME STUDIO / TOKENS</Text>
+        <Text color={theme.colors.text.muted}>  /  shared tokens · local preview</Text>
+      </MouseLayout>
+
+      <MouseLayout marginTop={1} flexDirection="row" flexWrap="wrap" gap={1}>
+        <Text bold color={theme.colors.text.muted}>PALETTE</Text>
+        {(Object.keys(studioPalettes) as StudioPaletteId[]).map((id) => (
+          <ThemeStudioChoice
+            key={id}
+            active={palette === id}
+            onActivate={() => setPalette(id)}
+          >
+            {studioPalettes[id].label}
+          </ThemeStudioChoice>
+        ))}
+      </MouseLayout>
+
+      <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
+        <Text bold color={theme.colors.text.muted}>DENSITY</Text>
+        {(['compact', 'comfortable', 'spacious'] as const).map((value) => (
+          <ThemeStudioChoice
+            key={value}
+            active={density === value}
+            onActivate={() => setDensity(value)}
+          >
+            {value[0]!.toUpperCase() + value.slice(1)}
+          </ThemeStudioChoice>
+        ))}
+      </MouseLayout>
+
+      <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
+        <Text bold color={theme.colors.text.muted}>SYMBOLS</Text>
+        <ThemeStudioChoice
+          active={symbolSet === 'signal'}
+          onActivate={() => setSymbolSet('signal')}
+        >
+          Signal
+        </ThemeStudioChoice>
+        <ThemeStudioChoice
+          active={symbolSet === 'classic'}
+          onActivate={() => setSymbolSet('classic')}
+        >
+          Classic
+        </ThemeStudioChoice>
+      </MouseLayout>
+
+      <MouseLayout marginTop={1} flexDirection="row" flexWrap="wrap" gap={1}>
+        <Text color={theme.colors.text.primary}>
+          palette: {studioPalettes[extension.palette].label}
+        </Text>
+        <Text color={theme.colors.focus.active}>density: {extension.density}</Text>
+        <Text color={theme.colors.text.primary}>symbols: {extension.symbolSet}</Text>
+      </MouseLayout>
+
+      <MouseLayout marginTop={1}>
+        <LocalThemePreview mode={mode} />
+      </MouseLayout>
+    </MouseLayout>
+  )
+}
+
+function LocalThemePreview({ mode }: { mode: ThemeMode }) {
+  return (
+    <ThemeProvider
+      mode={mode}
+      theme={{
+        colors: {
+          focus: { active: 'magenta', ring: 'magenta' },
+          border: { default: 'magenta', focus: 'magenta' },
+        },
+        extensions: {
+          studio: { preview: 'local-focus / plum' },
+        },
+      }}
+    >
+      <LocalThemePreviewContent />
+    </ThemeProvider>
+  )
+}
+
+function LocalThemePreviewContent() {
+  const theme = useTheme<StudioThemeExtensions>()
+  const { toast } = useToast()
+  const extension = theme.extensions.studio
+
+  return (
+    <MeasuredPanel title="LOCAL PREVIEW / nested ThemeProvider">
+      <MouseLayout flexDirection="row" flexWrap="wrap" gap={1}>
+        <Text color={theme.colors.focus.active}>{extension.preview}</Text>
+        <Badge variant="info" compact>{extension.palette.toUpperCase()}</Badge>
+        <Text color={theme.colors.text.muted}>
+          inherits {extension.density} / {extension.symbolSet}
+        </Text>
+        <Button
+          variant="primary"
+          onActivate={() => toast('success', 'Local preview action fired.')}
+        >
+          Preview action
+        </Button>
+        <Text color={theme.colors.focus.active}>◆</Text>
+      </MouseLayout>
+    </MeasuredPanel>
   )
 }
 
